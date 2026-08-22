@@ -1,0 +1,120 @@
+{
+  "name": "sensai",
+  "displayName": "sensAI",
+  "description": "AI code review for ARM / Andes firmware, on save",
+  "version": "0.1.0",
+  "publisher": "sensai",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:c"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "sensai.reviewCurrentFile",
+        "title": "sensAI: Review Current File",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sensai.exportFalsePositives",
+        "title": "sensAI: Export False Positive Report"
+      },
+      {
+        "command": "sensai.clearLocalMutes",
+        "title": "sensAI: Clear Local Mutes"
+      },
+      {
+        "command": "sensai.reloadRules",
+        "title": "sensAI: Reload Rules"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "sensai.reviewCurrentFile",
+          "when": "resourceLangId == c",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sensai",
+          "title": "sensAI",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sensai": [
+        {
+          "id": "sensai.findings",
+          "name": "Findings",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "sensAI",
+      "properties": {
+        "sensai.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "在存檔時自動審查 C 檔案。"
+        },
+        "sensai.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:3456",
+          "description": "Claude Code Router 的位址。"
+        },
+        "sensai.model": {
+          "type": "string",
+          "default": "claude-opus-5",
+          "description": "送給 CCR 的 model 欄位，實際上是路由 key。"
+        },
+        "sensai.includeDepth": {
+          "type": "number",
+          "default": 2,
+          "description": "解析 #include \"...\" 的遞迴深度。"
+        },
+        "sensai.contextBudgetBytes": {
+          "type": "number",
+          "default": 120000,
+          "description": "附帶 header 的總位元組上限。"
+        },
+        "sensai.requestTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "單次審查的逾時毫秒數。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
+    "watch": "npm run build -- --sourcemap --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "pretest": "tsc --outDir out-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "minimatch": "^10.0.1",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

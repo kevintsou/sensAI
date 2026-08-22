@@ -1,0 +1,14 @@
+# sensAI 專案設定（進版控）
+#
+# 只放團隊共同的決定。每台機器各自的設定 —— CCR 位址、model、逾時 ——
+# 走 VS Code settings，不要放在這裡。
+
+privacy:
+  # 命中的檔案完全跳過審查，不會外送任何內容。
+  # 受審檔案或它引用到的任何 header 命中，整次審查就跳過。
+  never_send:
+    - "src/secure/**"
+    - "**/crypto/**"
+
+  # 每次外送寫一筆 JSONL 記錄，讓資安稽核有跡可循。
+  audit_log: .sensai/sent.log
