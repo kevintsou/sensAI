@@ -7,7 +7,9 @@ import * as path from "node:path";
 import { buildContext } from "../out-test/context.js";
 import { evidenceIsGrounded, filterFindings } from "../out-test/filter.js";
 import { loadRules } from "../out-test/rules.js";
-import { buildUserMessage } from "../out-test/prompt.js";
+import { buildUserMessage, systemPrompt } from "../out-test/prompt.js";
+import { detectLanguage } from "../out-test/language.js";
+import { archFacts } from "../out-test/abi.js";
 import { muteKey } from "../out-test/mutes.js";
 
 const ROOT = "/proj";
@@ -26,7 +28,7 @@ function fakeFs(files, index = {}) {
   };
 }
 
-const opts = { workspaceRoot: ROOT, depth: 2, budgetBytes: 100000 };
+const opts = { workspaceRoot: ROOT, language: "c", depth: 2, budgetBytes: 100000 };
 
 test("include 解析：相對於引用檔案所在目錄", () => {
   const fa = fakeFs({ "/proj/src/regs.h": "#define A 1" });
@@ -203,6 +205,7 @@ test("prompt 帶行號、規則與 header", () => {
     source: "int a;\nint b;\n",
     headers: [{ path: "/proj/src/regs.h", text: "#define A 1" }],
     truncated: false,
+    language: "c",
   };
   const rules = [
     {
@@ -211,6 +214,7 @@ test("prompt 帶行號、規則與 header", () => {
       rule: "不要用 |= 清 W1C 位元",
       except: "唯讀暫存器不算",
       examples: { bad: "S |= F;", good: "S = F;" },
+      languages: ["c"],
     },
   ];
   const msg = buildUserMessage(ctx, rules);
@@ -225,6 +229,113 @@ test("prompt 帶行號、規則與 header", () => {
 });
 
 test("prompt 在上下文截斷時告知模型保守一點", () => {
-  const ctx = { filePath: "/p/a.c", source: "int a;\n", headers: [], truncated: true };
+  const ctx = {
+    filePath: "/p/a.c",
+    source: "int a;\n",
+    headers: [],
+    truncated: true,
+    language: "c",
+  };
   assert.match(buildUserMessage(ctx, []), /寧可不報/);
+});
+
+/* ------------------------------------------------------------- 組合語言 */
+
+test("依副檔名判斷語言，不依賴 languageId", () => {
+  assert.equal(detectLanguage("/p/uart.c"), "c");
+  assert.equal(detectLanguage("/p/regs.h"), "c");
+  assert.equal(detectLanguage("/p/boot.s"), "asm");
+  assert.equal(detectLanguage("/p/vectors.S"), "asm");
+  assert.equal(detectLanguage("/p/readme.md"), null);
+  assert.equal(detectLanguage("/p/Makefile"), null);
+});
+
+test("include 解析：支援 GAS 的 .include 指令", () => {
+  const fa = fakeFs({ "/proj/src/soc_defs.inc": ".equ BASE, 0x40001000" });
+  const ctx = buildContext(
+    "/proj/src/boot.s",
+    '    .include "soc_defs.inc"\n',
+    { ...opts, language: "asm" },
+    fa,
+  );
+  assert.deepEqual(
+    ctx.headers.map((h) => path.basename(h.path)),
+    ["soc_defs.inc"],
+  );
+  assert.equal(ctx.language, "asm");
+});
+
+test("include 解析：.S 走前處理器，#include 也要收", () => {
+  const fa = fakeFs({ "/proj/src/regs.h": "#define A 1" });
+  const ctx = buildContext(
+    "/proj/src/vectors.S",
+    '#include "regs.h"\n',
+    { ...opts, language: "asm" },
+    fa,
+  );
+  assert.equal(ctx.headers.length, 1);
+});
+
+test("規則的 languages：省略時兩種語言都適用", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-lang-"));
+  fs.mkdirSync(path.join(dir, ".sensai"));
+  fs.writeFileSync(
+    path.join(dir, ".sensai", "rules.yaml"),
+    [
+      "- id: both-by-default",
+      "  rule: 沒寫 languages",
+      "- id: asm-only",
+      "  languages: [asm]",
+      "  rule: 只給組語",
+      "- id: c-only",
+      "  languages: c",
+      "  rule: 單一字串也接受",
+      "- id: nonsense-languages",
+      "  languages: [klingon]",
+      "  rule: 無效值視為兩種都適用",
+    ].join("\n"),
+  );
+
+  const { rules, problems } = loadRules(dir);
+  const byId = Object.fromEntries(rules.map((r) => [r.id, r.languages]));
+  assert.deepEqual(byId["both-by-default"], ["c", "asm"]);
+  assert.deepEqual(byId["asm-only"], ["asm"]);
+  assert.deepEqual(byId["c-only"], ["c"]);
+  assert.deepEqual(byId["nonsense-languages"], ["c", "asm"]);
+  assert.equal(problems.length, 1, "只有無效值那條該產生警告");
+});
+
+test("組語的 system prompt 帶入架構事實，C 的不帶", () => {
+  const riscv = systemPrompt("asm", archFacts("riscv32-andes-v5"));
+  assert.match(riscv, /callee-saved/);
+  assert.match(riscv, /16-byte 對齊/);
+  assert.match(riscv, /s2-s11/);
+
+  const arm = systemPrompt("asm", archFacts("armv7e-m"));
+  assert.match(arm, /r4-r11/);
+  assert.match(arm, /8-byte 對齊/);
+  assert.equal(/s2-s11/.test(arm), false, "不該混進另一個架構的暫存器");
+
+  const c = systemPrompt("c", null);
+  assert.match(c, /volatile/);
+  assert.equal(/callee-saved/.test(c), false);
+});
+
+test("未知的架構 id 退回預設，不會炸掉", () => {
+  assert.equal(archFacts("does-not-exist").id, "riscv32-andes-v5");
+});
+
+test("組語的 prompt 用 asm 圍籬與對應的措辭", () => {
+  const ctx = {
+    filePath: "/proj/src/boot.s",
+    source: "my_func:\n    ret\n",
+    headers: [{ path: "/proj/src/soc_defs.inc", text: ".equ BASE, 0x40001000" }],
+    truncated: false,
+    language: "asm",
+  };
+  const msg = buildUserMessage(ctx, []);
+  assert.match(msg, /```asm/);
+  assert.match(msg, /1\| my_func:/);
+  assert.match(msg, /附帶的 include 檔案/);
+  assert.match(msg, /\.equ BASE/);
 });

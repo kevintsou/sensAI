@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as YAML from "yaml";
+import { SourceLanguage } from "./language";
 import { Rule, Severity } from "./types";
 
 export interface RulesLoadResult {
@@ -9,6 +10,7 @@ export interface RulesLoadResult {
 }
 
 const SEVERITIES: Severity[] = ["error", "warning", "info"];
+const LANGUAGES: SourceLanguage[] = ["c", "asm"];
 
 export function rulesPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, ".sensai", "rules.yaml");
@@ -66,9 +68,25 @@ export function loadRules(workspaceRoot: string): RulesLoadResult {
       }
     }
 
+    let languages: SourceLanguage[] = [...LANGUAGES];
+    if (raw.languages !== undefined) {
+      const listed = Array.isArray(raw.languages) ? raw.languages : [raw.languages];
+      const valid = listed.filter((l: unknown): l is SourceLanguage =>
+        LANGUAGES.includes(l as SourceLanguage),
+      );
+      if (valid.length === 0) {
+        problems.push(
+          `規則 ${raw.id} 的 languages 沒有有效值（可用：${LANGUAGES.join("、")}），視為兩種語言都適用。`,
+        );
+      } else {
+        languages = valid;
+      }
+    }
+
     rules.push({
       id: raw.id,
       severity,
+      languages,
       rule: raw.rule,
       except: typeof raw.except === "string" ? raw.except : undefined,
       examples:

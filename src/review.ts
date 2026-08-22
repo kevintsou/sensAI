@@ -1,11 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Finding, ReviewContext, Rule, Severity } from "./types";
-import { SYSTEM_PROMPT, buildUserMessage } from "./prompt";
+import { archFacts } from "./abi";
+import { buildUserMessage, systemPrompt } from "./prompt";
 
 export interface ReviewClientOptions {
   endpoint: string;
   model: string;
   timeoutMs: number;
+  /** 組語審查時要注入的 ABI 事實。C 檔案用不到。 */
+  archId: string;
 }
 
 /** CCR 沒啟動時丟這個，讓上層可以靜默降級而不是跳錯誤視窗。 */
@@ -138,7 +141,7 @@ export async function requestReview(
     response = await client.messages.create({
       model: opts.model,
       max_tokens: 16000,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt(ctx.language, ctx.language === "asm" ? archFacts(opts.archId) : null),
       messages: [{ role: "user", content: buildUserMessage(ctx, rules) }],
       tools: [FINDINGS_TOOL],
       tool_choice: { type: "tool", name: FINDINGS_TOOL.name },

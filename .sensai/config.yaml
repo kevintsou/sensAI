@@ -12,3 +12,8 @@ privacy:
 
   # 每次外送寫一筆 JSONL 記錄，讓資安稽核有跡可循。
   audit_log: .sensai/sent.log
+
+# 組語審查時要注入哪一組 ABI 事實（暫存器用途、呼叫慣例、對齊要求）。
+# 可用：riscv32-andes-v5、armv7e-m
+assembly:
+  arch: riscv32-andes-v5

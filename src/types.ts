@@ -1,3 +1,5 @@
+import { SourceLanguage } from "./language";
+
 export type Severity = "error" | "warning" | "info";
 
 export interface Rule {
@@ -6,6 +8,8 @@ export interface Rule {
   rule: string;
   except?: string;
   examples?: { bad?: string; good?: string };
+  /** 這條規則適用哪些語言。省略代表兩種都適用。 */
+  languages: SourceLanguage[];
 }
 
 /** 一則審查意見。欄位對應 SPEC.md「Finding 的結構」。 */
@@ -43,4 +47,5 @@ export interface ReviewContext {
   source: string;
   headers: HeaderFile[];
   truncated: boolean;
+  language: SourceLanguage;
 }

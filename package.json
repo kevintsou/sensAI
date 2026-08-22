@@ -1,7 +1,7 @@
 {
   "name": "sensai",
   "displayName": "sensAI",
-  "description": "AI code review for ARM / Andes firmware, on save",
+  "description": "AI code review for ARM / Andes firmware C and assembly, on save",
   "version": "0.1.0",
   "publisher": "sensai",
   "license": "MIT",
@@ -14,7 +14,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onLanguage:c"
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -40,7 +40,7 @@
       "editor/title": [
         {
           "command": "sensai.reviewCurrentFile",
-          "when": "resourceLangId == c",
+          "when": "resourceExtname =~ /\\.(c|h|s|S)$/",
           "group": "navigation"
         }
       ]
@@ -69,7 +69,7 @@
         "sensai.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "在存檔時自動審查 C 檔案。"
+          "description": "在存檔時自動審查 C 與組語檔案。"
         },
         "sensai.endpoint": {
           "type": "string",

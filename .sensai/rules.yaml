@@ -7,14 +7,21 @@
 #
 # 每條規則：
 #   id        必填，唯一
+#   languages [c] / [asm] / [c, asm]，省略代表兩種都適用
 #   severity  error / warning / info，預設 warning
 #   rule      必填，自然語言，直接寫給模型看
 #   except    什麼情況不算問題 —— 團隊層級的例外放這裡
 #   examples  一組正反範例。不要省略，對準確度的幫助遠大於把 rule 寫更長。
 #
+# 暫存器用途與呼叫慣例這類「架構事實」不用寫在這裡，擴充會自動注入
+# （見 src/abi.ts，架構由 .sensai/config.yaml 的 assembly.arch 指定）。
+#
 # 以下是範例，請換成你們專案真正的規則。
 
+# ---------------------------------------------------------------- C
+
 - id: dma-cache-maintenance
+  languages: [c]
   severity: error
   rule: |
     本專案 SoC 的 D-cache 是 write-back。DMA buffer 在啟動 DMA 前必須先 clean
@@ -31,6 +38,7 @@
       dma_start(DMA_CH0, tx_buf, len);
 
 - id: volatile-shared-state
+  languages: [c]
   severity: error
   rule: |
     被 ISR 與主程式同時存取的變數必須標 volatile，否則編譯器會把讀取
@@ -49,11 +57,13 @@
       void main_loop(void) { while (!rx_ready) { } }
 
 - id: w1c-status-bits
+  languages: [c, asm]
   severity: error
   rule: |
     狀態暫存器裡的中斷旗標多半是 write-1-clear：寫 1 才是清除，寫 0 沒有作用。
-    用 |= 去「設定」一個 W1C 位元，實際上是把讀回來的所有已設旗標又寫回去，
-    會把其他還沒處理的中斷一併清掉。清除單一旗標要直接寫值，不要 read-modify-write。
+    用讀出後再寫回的方式（C 的 |=，組語的 load / or / store）去清一個 W1C 位元，
+    實際上是把讀回來的所有已設旗標又寫回去，會把其他還沒處理的中斷一併清掉。
+    清除單一旗標要直接寫值，不要 read-modify-write。
   examples:
     bad: |
       UART0->STATUS |= UART_STATUS_TXDONE;
@@ -61,6 +71,7 @@
       UART0->STATUS = UART_STATUS_TXDONE;
 
 - id: isr-non-reentrant
+  languages: [c]
   severity: error
   rule: |
     ISR 裡不可以呼叫非 reentrant 或會阻塞的函式，包括 malloc、free、printf、
@@ -78,10 +89,11 @@
       }
 
 - id: rmw-critical-section
+  languages: [c]
   severity: warning
   rule: |
     對 ISR 也會改動的共享變數或硬體暫存器做 read-modify-write（|=、&=、++）時，
-    必須關中斷或使用 LDREX/STREX。中斷落在讀跟寫之間的話，ISR 的更新會被覆蓋掉。
+    必須關中斷或使用不可分割的操作。中斷落在讀跟寫之間的話，ISR 的更新會被覆蓋掉。
   except: |
     只有主程式會寫、ISR 只讀的變數不需要保護。
     已經在 ISR 內部、且該 ISR 不會被同優先權中斷搶佔的情況也不需要。
@@ -95,6 +107,7 @@
       __set_PRIMASK(primask);
 
 - id: delay-loop-optimized-away
+  languages: [c]
   severity: warning
   rule: |
     用空迴圈做延遲會在 -O2 下被整個優化掉。硬體要求的等待時間必須用
@@ -106,3 +119,140 @@
     good: |
       delay_us(10);
       PLL->CTRL |= PLL_ENABLE;
+
+# ---------------------------------------------------------- 組合語言
+
+- id: asm-callee-saved
+  languages: [asm]
+  severity: error
+  rule: |
+    函式若修改 callee-saved 暫存器，必須在 prologue 存進堆疊、在每一條返回路徑
+    還原。少存一個的話，呼叫端的區域變數會在呼叫後莫名其妙變值 ——
+    而且症狀會出現在離這個函式很遠的地方。
+  except: |
+    函式的第一個 label 就是整個程式進入點（如 _start、reset handler）時，
+    沒有呼叫端可以回去，不適用這條規則。
+  examples:
+    bad: |
+      my_func:
+          addi    sp, sp, -16
+          sw      ra, 12(sp)
+          mv      s0, a0          # 改了 s0 但沒存
+          call    helper
+          lw      ra, 12(sp)
+          addi    sp, sp, 16
+          ret
+    good: |
+      my_func:
+          addi    sp, sp, -16
+          sw      ra, 12(sp)
+          sw      s0, 8(sp)
+          mv      s0, a0
+          call    helper
+          lw      s0, 8(sp)
+          lw      ra, 12(sp)
+          addi    sp, sp, 16
+          ret
+
+- id: asm-return-address
+  languages: [asm]
+  severity: error
+  rule: |
+    函式內若呼叫其他函式，return address 暫存器會被覆寫，必須先保存再呼叫，
+    返回前還原。漏掉的話函式會跳回自己呼叫的地方，形成無窮迴圈或亂跳。
+  except: |
+    葉子函式 —— 完全不呼叫其他函式的 —— 不需要保存。
+  examples:
+    bad: |
+      outer:
+          call    inner
+          ret
+    good: |
+      outer:
+          addi    sp, sp, -16
+          sw      ra, 12(sp)
+          call    inner
+          lw      ra, 12(sp)
+          addi    sp, sp, 16
+          ret
+
+- id: asm-stack-balance
+  languages: [asm]
+  severity: error
+  rule: |
+    函式的每一條返回路徑上，堆疊指標的淨變化必須為零。提早返回的分支
+    特別容易漏掉還原，那會讓呼叫端的堆疊框架整個錯位。
+  except: |
+    以動態方式調整堆疊（例如依執行期長度配置）的函式無法靜態確認，
+    無法確定時不要下判斷。
+  examples:
+    bad: |
+      my_func:
+          addi    sp, sp, -16
+          beqz    a0, .Lerror
+          addi    sp, sp, 16
+          ret
+      .Lerror:
+          li      a0, -1
+          ret                     # sp 沒還原
+    good: |
+      my_func:
+          addi    sp, sp, -16
+          beqz    a0, .Lerror
+          li      a0, 0
+          j       .Ldone
+      .Lerror:
+          li      a0, -1
+      .Ldone:
+          addi    sp, sp, 16
+          ret
+
+- id: asm-stack-alignment
+  languages: [asm]
+  severity: error
+  rule: |
+    函式邊界上的堆疊指標必須符合架構要求的對齊（見架構事實）。
+    對齊錯誤在多數情況下不會立刻出錯，但一旦碰到需要對齊的存取
+    （浮點、向量、某些 atomic）就會直接爆掉，而且很難追。
+  examples:
+    bad: |
+      my_func:
+          addi    sp, sp, -12
+    good: |
+      my_func:
+          addi    sp, sp, -16
+
+- id: asm-mmio-ordering
+  languages: [asm]
+  severity: warning
+  rule: |
+    對 MMIO 位址的存取之間若有順序需求，必須放適當的 fence 或 barrier。
+    處理器只保證有資料相依的存取之間的順序，設定暫存器再讀狀態這種
+    沒有暫存器相依的組合不受保證，會被亂序執行。
+  examples:
+    bad: |
+      sw      t1, 0(t0)           # 寫 CTRL 啟動傳輸
+      lw      t2, 4(t0)           # 立刻讀 STATUS
+    good: |
+      sw      t1, 0(t0)
+      fence   ow, ir
+      lw      t2, 4(t0)
+
+- id: asm-c-abi-match
+  languages: [asm]
+  severity: error
+  rule: |
+    組語函式的簽章必須跟 C 端的宣告對得起來：讀取的參數暫存器數量不能超過
+    C 宣告的參數個數，C 宣告非 void 時必須寫入回傳值暫存器。
+    這類不一致不會有任何編譯期警告，執行時會讀到殘留的垃圾值。
+  examples:
+    bad: |
+      # C: uint32_t crc16(const uint8_t *buf, uint32_t len);
+      crc16:
+          lw      t0, 0(a2)       # a2 不在宣告的參數裡
+          ret                     # 沒有設定 a0
+    good: |
+      # C: uint32_t crc16(const uint8_t *buf, uint32_t len);
+      crc16:
+          li      a0, 0
+          ret

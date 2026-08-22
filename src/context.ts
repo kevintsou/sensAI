@@ -1,18 +1,25 @@
 import * as fs from "fs";
 import * as path from "path";
+import { SourceLanguage } from "./language";
 import { HeaderFile, ReviewContext } from "./types";
 
-/** 只處理引號式 include；`<...>` 是系統 header，跳過。 */
-const INCLUDE_RE = /^[ \t]*#[ \t]*include[ \t]*"([^"]+)"/gm;
+/**
+ * 只處理引號式 include；`<...>` 是系統 header，跳過。
+ *
+ * 兩種形式都收：`#include "x.h"`（C，以及經過前處理器的 .S）
+ * 與 `.include "x.inc"`（GAS 的 .s）。
+ */
+const INCLUDE_RE = /^[ \t]*(?:#[ \t]*include|\.include)[ \t]*"([^"]+)"/gm;
 
 const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", "out", "obj", "Debug", "Release", ".vscode",
 ]);
 
-const HEADER_EXTS = new Set([".h", ".hpp", ".hh", ".inc"]);
+const HEADER_EXTS = new Set([".h", ".hpp", ".hh", ".inc", ".s", ".S"]);
 
 export interface ContextOptions {
   workspaceRoot: string;
+  language: SourceLanguage;
   /** #include 的遞迴深度。1 = 只抓直接引用的 header。 */
   depth: number;
   /** 附帶 header 的總位元組上限。 */
@@ -159,5 +166,5 @@ export function buildContext(
     frontier = next;
   }
 
-  return { filePath, source, headers, truncated };
+  return { filePath, source, headers, truncated, language: opts.language };
 }

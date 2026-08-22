@@ -1,8 +1,10 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext } from "./context";
 import { filterFindings } from "./filter";
+import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
 import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
@@ -33,7 +35,10 @@ function readSettings(): Settings {
 
 class Controller {
   private rules: Rule[] = [];
-  private config: ProjectConfig = { privacy: { neverSend: [], auditLog: null } };
+  private config: ProjectConfig = {
+    privacy: { neverSend: [], auditLog: null },
+    assemblyArch: DEFAULT_ARCH_ID,
+  };
   private mutes: MuteStore | undefined;
   private inFlight = new Set<string>();
   private lastSource = new Map<string, string>();
@@ -74,10 +79,15 @@ class Controller {
 
   async review(document: vscode.TextDocument): Promise<void> {
     const root = this.workspaceRoot;
-    if (!root || document.languageId !== "c") {
+    if (!root) {
       return;
     }
     const filePath = document.uri.fsPath;
+    // 用副檔名判斷，不用 languageId —— .s 在沒裝組語擴充時會是 plaintext。
+    const language = detectLanguage(filePath);
+    if (!language) {
+      return;
+    }
     if (this.inFlight.has(filePath)) {
       return;
     }
@@ -88,9 +98,13 @@ class Controller {
 
     const ctx: ReviewContext = buildContext(filePath, source, {
       workspaceRoot: root,
+      language,
       depth: settings.includeDepth,
       budgetBytes: settings.contextBudgetBytes,
     });
+
+    // 只送這個語言適用的規則。把 C 的規則送去審組語只會製造誤報。
+    const rules = this.rules.filter((r) => r.languages.includes(language));
 
     const blocked = blockedPaths(ctx, this.config, root);
     if (blocked.length > 0) {
@@ -105,15 +119,19 @@ class Controller {
     }
 
     this.inFlight.add(filePath);
-    this.panel.setState({ kind: "reviewing", file: path.basename(filePath) });
+    this.panel.setState({
+      kind: "reviewing",
+      file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${rules.length} 條規則）`,
+    });
     this.setStatus("$(sync~spin) sensAI", "審查中");
 
     const started = Date.now();
     try {
-      const raw = await requestReview(ctx, this.rules, {
+      const raw = await requestReview(ctx, rules, {
         endpoint: settings.endpoint,
         model: settings.model,
         timeoutMs: settings.requestTimeoutMs,
+        archId: this.config.assemblyArch,
       });
       const durationMs = Date.now() - started;
 

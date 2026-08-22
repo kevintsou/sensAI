@@ -1,6 +1,19 @@
+import { ArchFacts } from "./abi";
+import { SourceLanguage } from "./language";
 import { Rule, ReviewContext } from "./types";
 
-export const SYSTEM_PROMPT = `你是一位資深韌體工程師，正在審查一個 ARM / Andes AndeStar V5 專案裡的單一 C 檔案。
+const DISCIPLINE = `每一則意見都必須填滿：
+- trigger_condition —— 什麼情況下會出事，要具體到哪個時序、哪個呼叫順序、哪個中斷時機
+- consequence —— 會造成什麼結果
+- evidence —— 引用檔案裡實際存在的識別字或行號
+
+**如果你講不出具體的 trigger_condition，就不要回報這一則。**
+
+寧可少報。一則錯誤的意見造成的信任損失，大於漏掉一則真實問題。
+
+用繁體中文回答。`;
+
+const C_PROMPT = `你是一位資深韌體工程師，正在審查一個 ARM / Andes AndeStar V5 專案裡的單一 C 檔案。
 
 你的任務是找出**會造成實際故障**的問題，而且只回報你說得出具體失效情境的問題。
 
@@ -19,18 +32,42 @@ export const SYSTEM_PROMPT = `你是一位資深韌體工程師，正在審查�
 - 編譯器或 clangd 本來就會抓到的語法與型別錯誤
 - 你只是覺得「可能有問題」但講不出觸發條件的東西
 
-每一則意見都必須填滿：
-- trigger_condition —— 什麼情況下會出事，要具體到哪個時序、哪個呼叫順序、哪個中斷時機
-- consequence —— 會造成什麼結果
-- evidence —— 引用檔案裡實際存在的識別字或行號
+附上的 header 只是讓你理解 macro 與型別定義，**不要審查 header 本身**，只審查目標 C 檔案。`;
 
-**如果你講不出具體的 trigger_condition，就不要回報這一則。**
+const ASM_PROMPT = `你是一位資深韌體工程師，正在審查一個組合語言檔案。
 
-寧可少報。一則錯誤的意見造成的信任損失，大於漏掉一則真實問題。
+組語沒有型別檢查、沒有編譯器幫忙擋錯，一個 ABI 違規造成的狀態損毀通常會在
+離錯誤發生點很遠的地方才炸開。你的任務是找出這類問題。
 
-附上的 header 只是讓你理解 macro 與型別定義，**不要審查 header 本身**，只審查目標 C 檔案。
+值得回報的：
+- ABI 違規：修改了 callee-saved 暫存器，但 prologue 沒保存或 epilogue 沒還原
+- return address 暫存器在呼叫其他函式前沒有保存
+- 堆疊不平衡：prologue 與 epilogue 的 sp 調整量不相等，或某條返回路徑沒有還原 sp
+- 堆疊對齊不符合架構要求
+- 存在沒有以返回指令結束的執行路徑
+- 分支或跳躍到未定義的 label
+- MMIO 存取缺少必要的 fence 或 barrier，或順序假設不成立
+- 與 C 端宣告不一致：讀取了超出宣告參數數量的參數暫存器、
+  C 宣告非 void 卻沒有寫入回傳值暫存器
+- 使用了目標架構不支援的指令
+- 違反下方「專案規則」的地方
 
-用繁體中文回答。`;
+不要回報的：
+- label 命名、排版、註解、對齊風格
+- 「這幾行可以用更少指令寫完」這類優化建議 —— 除非現在的寫法是錯的
+- 組譯器本來就會抓到的語法錯誤
+- 你只是覺得「可能有問題」但講不出觸發條件的東西
+
+碰到巨集展開、條件組譯，或是你無法確定控制流的區段時，就不要對那個區段下判斷 ——
+說不準的時候閉嘴，比猜錯有價值。
+
+附上的 include 檔案只是讓你理解常數與巨集定義，**不要審查那些檔案**，只審查目標檔案。`;
+
+export function systemPrompt(language: SourceLanguage, arch: ArchFacts | null): string {
+  const base = language === "asm" ? ASM_PROMPT : C_PROMPT;
+  const facts = language === "asm" && arch ? `\n\n## 架構事實\n\n${arch.text}` : "";
+  return `${base}${facts}\n\n${DISCIPLINE}`;
+}
 
 function renderRule(r: Rule): string {
   const parts = [`### ${r.id}（severity: ${r.severity}）`, r.rule.trim()];
@@ -38,10 +75,10 @@ function renderRule(r: Rule): string {
     parts.push(`不算問題的例外：\n${r.except.trim()}`);
   }
   if (r.examples?.bad) {
-    parts.push("錯誤示範：\n```c\n" + r.examples.bad.trim() + "\n```");
+    parts.push("錯誤示範：\n```\n" + r.examples.bad.trim() + "\n```");
   }
   if (r.examples?.good) {
-    parts.push("正確做法：\n```c\n" + r.examples.good.trim() + "\n```");
+    parts.push("正確做法：\n```\n" + r.examples.good.trim() + "\n```");
   }
   return parts.join("\n\n");
 }
@@ -54,6 +91,7 @@ function numbered(source: string): string {
 }
 
 export function buildUserMessage(ctx: ReviewContext, rules: Rule[]): string {
+  const fence = ctx.language === "asm" ? "asm" : "c";
   const sections: string[] = [];
 
   if (rules.length > 0) {
@@ -64,22 +102,26 @@ export function buildUserMessage(ctx: ReviewContext, rules: Rule[]): string {
   }
 
   if (ctx.headers.length > 0) {
-    const headerText = ctx.headers
-      .map((h) => `### ${h.path}\n\`\`\`c\n${h.text}\n\`\`\``)
+    const label =
+      ctx.language === "asm"
+        ? "附帶的 include 檔案（僅供理解常數與巨集，不要審查這些檔案）"
+        : "附帶的 header（僅供理解 macro 與型別，不要審查這些檔案）";
+    const body = ctx.headers
+      .map((h) => `### ${h.path}\n\`\`\`\n${h.text}\n\`\`\``)
       .join("\n\n");
-    sections.push(
-      "## 附帶的 header（僅供理解 macro 與型別，不要審查這些檔案）\n\n" + headerText,
-    );
+    sections.push(`## ${label}\n\n${body}`);
   }
 
   if (ctx.truncated) {
-    sections.push("（部分 header 因為長度上限沒有附上。判斷不確定時，寧可不報。）");
+    sections.push("（部分 include 因為長度上限沒有附上。判斷不確定時，寧可不報。）");
   }
 
   sections.push(
     `## 待審查檔案：${ctx.filePath}\n\n` +
       "行號已標在每行前面，回報時請使用這些行號。\n\n" +
-      "```c\n" +
+      "```" +
+      fence +
+      "\n" +
       numbered(ctx.source) +
       "\n```",
   );

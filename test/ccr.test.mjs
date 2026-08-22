@@ -9,6 +9,7 @@ const CTX = {
   source: "static uint32_t rx_ready;\nvoid main_loop(void) { while (!rx_ready) { } }\n",
   headers: [],
   truncated: false,
+  language: "c",
 };
 
 const RULES = [
@@ -59,6 +60,7 @@ test("送到 CCR 的請求帶著 tool 定義與強制 tool_choice", async () => 
       endpoint: router.endpoint,
       model: "my-route",
       timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
     });
   } finally {
     await router.close();
@@ -94,6 +96,7 @@ test("解析回傳的 findings", async () => {
       endpoint: router.endpoint,
       model: "m",
       timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
     });
     assert.equal(findings.length, 1);
     assert.equal(findings[0].line, 2);
@@ -115,6 +118,7 @@ test("欄位缺漏或型別不對的 finding 會被丟掉，不會讓整批失�
       endpoint: router.endpoint,
       model: "m",
       timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
     });
     assert.equal(findings.length, 1);
     assert.equal(findings[0].severity, "warning", "缺 severity 時退回 warning");
@@ -141,7 +145,12 @@ test("路由的模型不支援 tool use 時給出可理解的錯誤", async () =
   });
   try {
     await assert.rejects(
-      () => requestReview(CTX, RULES, { endpoint: router.endpoint, model: "m", timeoutMs: 5000 }),
+      () => requestReview(CTX, RULES, {
+          endpoint: router.endpoint,
+          model: "m",
+          timeoutMs: 5000,
+          archId: "riscv32-andes-v5",
+        }),
       /tool use/,
     );
   } finally {
@@ -156,11 +165,52 @@ test("CCR 沒開時丟 EndpointUnavailableError，讓上層靜默降級", async 
   await router.close();
 
   await assert.rejects(
-    () => requestReview(CTX, RULES, { endpoint, model: "m", timeoutMs: 5000 }),
+    () => requestReview(CTX, RULES, { endpoint, model: "m", timeoutMs: 5000, archId: "riscv32-andes-v5" }),
     (err) => {
       assert.ok(err instanceof EndpointUnavailableError);
       assert.match(err.message, /連不上 Claude Code Router/);
       return true;
     },
   );
+});
+
+test("組語審查時，架構事實會進到 system prompt", async () => {
+  const router = await mockRouter((res) => replyWithFindings(res, []));
+  const asmCtx = {
+    filePath: "/proj/src/boot.s",
+    source: "my_func:\n    addi sp, sp, -12\n    ret\n",
+    headers: [],
+    truncated: false,
+    language: "asm",
+  };
+  try {
+    await requestReview(asmCtx, [], {
+      endpoint: router.endpoint,
+      model: "m",
+      timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
+    });
+  } finally {
+    await router.close();
+  }
+
+  const { system } = router.requests[0].body;
+  assert.match(system, /callee-saved/);
+  assert.match(system, /16-byte 對齊/);
+  assert.match(system, /s2-s11/);
+});
+
+test("C 審查時不注入組語的 ABI 事實", async () => {
+  const router = await mockRouter((res) => replyWithFindings(res, []));
+  try {
+    await requestReview(CTX, RULES, {
+      endpoint: router.endpoint,
+      model: "m",
+      timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
+    });
+  } finally {
+    await router.close();
+  }
+  assert.equal(/callee-saved/.test(router.requests[0].body.system), false);
 });

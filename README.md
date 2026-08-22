@@ -1,6 +1,6 @@
 # sensAI
 
-VS Code 擴充。存檔 `.c` 時用 AI 做一次單檔 code review，針對 ARM / Andes AndeStar V5 韌體開發。
+VS Code 擴充。存檔 `.c` 或 `.s` 時用 AI 做一次單檔 code review，針對 ARM / Andes AndeStar V5 韌體開發。
 
 設計理由與取捨記在 [SPEC.md](./SPEC.md)。
 
@@ -24,11 +24,16 @@ npm run build
 
 ### 先驗證想法再投入
 
-`examples/uart_dma.c` 埋了六個 `rules.yaml` 涵蓋的真實韌體錯誤，
-另外放了三段「看起來像但其實不是問題」的程式碼。開啟後存檔，
-比對檔案末尾列出的期待結果：
+`examples/` 下有兩個埋好錯誤的檔案，各自在檔尾列出應該與不應該被回報的項目：
 
-- 六個都抓到，且沒有誤報那三段 → prompt 與規則的方向對了
+| 檔案 | 埋的錯誤 | 誘餌 |
+|---|---|---|
+| `uart_dma.c` | 6 個（W1C 誤用、缺 volatile、DMA 沒 clean cache、ISR 裡 malloc、RMW 沒關中斷、空迴圈延遲） | 3 段 |
+| `uart_dma.s` | 7 個（缺 fence、W1C 誤用、callee-saved 沒存、堆疊沒對齊、ra 沒保存、堆疊不平衡、ABI 不符） | 3 段 |
+
+開啟後存檔，比對檔案末尾的期待結果：
+
+- 都抓到，且沒有誤報那些誘餌 → prompt 與規則的方向對了
 - 漏抓 → 調整對應規則的 `rule` 措辭，或補 `examples`
 - 誤報 → 該規則需要補 `except`
 
@@ -57,6 +62,10 @@ npm run build
 privacy:
   never_send: ["src/secure/**", "**/crypto/**"]
   audit_log: .sensai/sent.log
+
+# 組語審查要注入哪一組 ABI 事實。可用：riscv32-andes-v5、armv7e-m
+assembly:
+  arch: riscv32-andes-v5
 ```
 
 受審檔案或它引用到的**任何** header 命中 `never_send`，整次審查就跳過。
@@ -71,6 +80,7 @@ privacy:
 
 ```yaml
 - id: w1c-status-bits
+  languages: [c, asm]
   severity: error
   rule: |
     狀態暫存器裡的中斷旗標多半是 write-1-clear。用 |= 去設定一個 W1C 位元，
@@ -88,6 +98,13 @@ privacy:
 
 `except` 讓「不該報什麼」跟「該報什麼」待在同一份受控文件裡。
 使用者反覆靜音同一條規則，通常代表該補一段 `except`。
+
+`languages` 指定適用語言（`[c]` / `[asm]` / `[c, asm]`），省略代表兩者皆是。
+把 C 的規則送去審組語只會製造誤報。
+
+暫存器用途、呼叫慣例、堆疊對齊這類**架構事實**不用寫進規則 ——
+擴充內建（見 `src/abi.ts`），組語審查時依 `assembly.arch` 自動注入。
+判斷「什麼算問題」的部分仍然全部在你的規則裡。
 
 改動 `.sensai/*.yaml` 會自動熱重載，不用重開視窗。
 
