@@ -334,7 +334,7 @@ class Controller {
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("sensAI");
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.command = "sensai.reviewCurrentFile";
+  status.command = "sensai.showPanel";
   status.text = "sensAI";
   status.show();
 
@@ -364,6 +364,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void controller.review(doc);
       }
     }),
+    vscode.commands.registerCommand("sensai.showPanel", () => panel.reveal()),
     vscode.commands.registerCommand("sensai.initProject", () => controller.initProject()),
     vscode.commands.registerCommand("sensai.exportFalsePositives", () =>
       controller.exportFalsePositives(),

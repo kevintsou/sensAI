@@ -24,6 +24,10 @@
         "icon": "$(search)"
       },
       {
+        "command": "sensai.showPanel",
+        "title": "sensAI: Show Findings"
+      },
+      {
         "command": "sensai.initProject",
         "title": "sensAI: Initialize Project"
       },
