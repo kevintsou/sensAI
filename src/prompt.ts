@@ -1,6 +1,6 @@
 import { ArchFacts } from "./abi";
 import { SourceLanguage } from "./language";
-import { Rule, ReviewContext } from "./types";
+import { Rule, ReviewContext, SYNTAX_RULE_ID } from "./types";
 
 const DISCIPLINE = `每一則意見都必須填滿：
 - trigger_condition —— 什麼情況下會出事，要具體到哪個時序、哪個呼叫順序、哪個中斷時機
@@ -8,6 +8,12 @@ const DISCIPLINE = `每一則意見都必須填滿：
 - evidence —— 引用檔案裡實際存在的識別字或行號
 
 **如果你講不出具體的 trigger_condition，就不要回報這一則。**
+
+語法與型別錯誤是唯一的例外。這類問題在編譯或組譯階段就會失敗，沒有執行時的觸發時序，
+所以不適用上面那條。回報這類問題時：
+- trigger_condition 寫編譯當下會發生什麼，例如「編譯時，第 28 行的 xxxx 無法解析為任何宣告」
+- severity 一律填 error —— 這種檔案根本產不出可執行檔
+- rule_id 填 "${SYNTAX_RULE_ID}"
 
 寧可少報。一則錯誤的意見造成的信任損失，大於漏掉一則真實問題。
 
@@ -18,6 +24,9 @@ const C_PROMPT = `你是一位資深韌體工程師，正在審查一個 ARM / A
 你的任務是找出**會造成實際故障**的問題，而且只回報你說得出具體失效情境的問題。
 
 值得回報的：
+- 語法與型別錯誤：無法編譯的寫法、未宣告的識別字、缺少分號、括號或大括號不成對、
+  型別不相容的指派、函式呼叫的參數數量或型別不符、對不完整型別取值。
+  不要假設有其他工具會抓這些 —— 這台機器上不一定裝了編譯器或 clangd
 - 硬體暫存器操作錯誤（用 |= 去清 write-1-clear 位元、寫入唯讀暫存器、缺少解鎖序列）
 - 中斷與併發（ISR 與主程式共享的狀態缺 volatile、read-modify-write 缺臨界區、缺 memory barrier）
 - DMA 與 cache 一致性
@@ -29,7 +38,6 @@ const C_PROMPT = `你是一位資深韌體工程師，正在審查一個 ARM / A
 不要回報的：
 - 命名、排版、註解、可讀性
 - 泛泛的「建議加強錯誤處理」「建議檢查回傳值」—— 除非你能指出這個特定呼叫失敗時會造成什麼具體後果
-- 編譯器或 clangd 本來就會抓到的語法與型別錯誤
 - 你只是覺得「可能有問題」但講不出觸發條件的東西
 
 附上的 header 只是讓你理解 macro 與型別定義，**不要審查 header 本身**，只審查目標 C 檔案。`;
@@ -40,6 +48,9 @@ const ASM_PROMPT = `你是一位資深韌體工程師，正在審查一個組合
 離錯誤發生點很遠的地方才炸開。你的任務是找出這類問題。
 
 值得回報的：
+- 語法錯誤：組譯器無法組譯的寫法、拼錯的指令助憶碼、運算元數量不對、
+  不合法的定址模式、寫錯的 directive。
+  不要假設有其他工具會抓這些 —— 這台機器上不一定裝了組譯器
 - ABI 違規：修改了 callee-saved 暫存器，但 prologue 沒保存或 epilogue 沒還原
 - return address 暫存器在呼叫其他函式前沒有保存
 - 堆疊不平衡：prologue 與 epilogue 的 sp 調整量不相等，或某條返回路徑沒有還原 sp
@@ -55,7 +66,6 @@ const ASM_PROMPT = `你是一位資深韌體工程師，正在審查一個組合
 不要回報的：
 - label 命名、排版、註解、對齊風格
 - 「這幾行可以用更少指令寫完」這類優化建議 —— 除非現在的寫法是錯的
-- 組譯器本來就會抓到的語法錯誤
 - 你只是覺得「可能有問題」但講不出觸發條件的東西
 
 碰到巨集展開、條件組譯，或是你無法確定控制流的區段時，就不要對那個區段下判斷 ——
@@ -63,10 +73,32 @@ const ASM_PROMPT = `你是一位資深韌體工程師，正在審查一個組合
 
 附上的 include 檔案只是讓你理解常數與巨集定義，**不要審查那些檔案**，只審查目標檔案。`;
 
-export function systemPrompt(language: SourceLanguage, arch: ArchFacts | null): string {
+/**
+ * 沒有任何專案規則時附加這段。
+ *
+ * 這種情況下放行整套審查，會拿到任何通用工具都給得出的泛泛意見 —— 那正是
+ * 這個專案一開始要避開的東西。但語法錯誤不一樣：它的對錯不依賴專案知識，
+ * 而且這台機器上不一定裝了編譯器。所以退化成只做語法檢查，而不是整個不做。
+ */
+const SYNTAX_ONLY = `## 本次審查的範圍限制
+
+這個專案沒有提供任何適用於本語言的規則。**只回報語法與型別錯誤**，
+其他一律不要回報 —— 包括你依通用知識判斷有問題的地方。
+
+沒有專案規則的情況下，通用意見的價值不足以打擾作者。語法錯誤是唯一的例外，
+因為它的對錯不需要任何專案背景知識就能確定。
+
+沒有語法錯誤的話，回傳空陣列。`;
+
+export function systemPrompt(
+  language: SourceLanguage,
+  arch: ArchFacts | null,
+  syntaxOnly = false,
+): string {
   const base = language === "asm" ? ASM_PROMPT : C_PROMPT;
   const facts = language === "asm" && arch ? `\n\n## 架構事實\n\n${arch.text}` : "";
-  return `${base}${facts}\n\n${DISCIPLINE}`;
+  const scope = syntaxOnly ? `\n\n${SYNTAX_ONLY}` : "";
+  return `${base}${facts}${scope}\n\n${DISCIPLINE}`;
 }
 
 function renderRule(r: Rule): string {

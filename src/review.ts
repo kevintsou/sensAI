@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { Finding, ReviewContext, Rule, Severity } from "./types";
+import { Finding, ReviewContext, Rule, Severity, SYNTAX_RULE_ID } from "./types";
 import { archFacts } from "./abi";
 import { buildUserMessage, systemPrompt } from "./prompt";
 
@@ -46,7 +46,8 @@ const FINDINGS_TOOL: Anthropic.Tool = {
             severity: {
               type: "string",
               enum: ["error", "warning", "info"],
-              description: "命中專案規則時，沿用該規則的 severity。",
+              description:
+                "命中專案規則時，沿用該規則的 severity。語法或型別錯誤一律填 error。",
             },
             message: {
               type: "string",
@@ -56,7 +57,8 @@ const FINDINGS_TOOL: Anthropic.Tool = {
               type: "string",
               description:
                 "什麼情況下會出事，要具體到時序、呼叫順序或中斷時機。" +
-                '例如「當 ISR 在第 40 到 42 行之間觸發時」。不可以是「在某些情況下」這種空泛描述。',
+                '例如「當 ISR 在第 40 到 42 行之間觸發時」。不可以是「在某些情況下」這種空泛描述。' +
+                "語法或型別錯誤則改寫編譯階段的失敗，例如「編譯時無法解析 xxxx」。",
             },
             consequence: {
               type: "string",
@@ -68,7 +70,9 @@ const FINDINGS_TOOL: Anthropic.Tool = {
             },
             rule_id: {
               type: ["string", "null"],
-              description: "命中的專案規則 id。不是由規則觸發的話填 null。",
+              description:
+                `命中的專案規則 id。語法或型別錯誤填 "${SYNTAX_RULE_ID}"。` +
+                "兩者皆非的話填 null。",
             },
           },
           required: [
@@ -148,7 +152,11 @@ export async function requestReview(
     response = await client.messages.create({
       model: opts.model,
       max_tokens: 16000,
-      system: systemPrompt(ctx.language, ctx.language === "asm" ? archFacts(opts.archId) : null),
+      system: systemPrompt(
+        ctx.language,
+        ctx.language === "asm" ? archFacts(opts.archId) : null,
+        rules.length === 0,
+      ),
       messages: [{ role: "user", content: buildUserMessage(ctx, rules) }],
       tools: [FINDINGS_TOOL],
       tool_choice: { type: "tool", name: FINDINGS_TOOL.name },

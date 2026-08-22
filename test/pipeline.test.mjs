@@ -107,6 +107,20 @@ test("evidence 引用到原始碼裡存在的識別字才算數", () => {
   assert.equal(evidenceIsGrounded("tx_pending 沒有標 volatile", source, 1), false);
 });
 
+test("evidence 只提到暫存器名時，仍然算引用到原始碼", () => {
+  // 兩字元的暫存器名進不了 IDENT_RE，evidence 剩下的 prologue / epilogue
+  // 又不會出現在組語裡 —— 沒有另外認暫存器的話，這則正確的意見會被誤殺。
+  const source = "uart_send_buffer:\n    mv      s1, a1\n    beqz    s1, .Lsend_done\n";
+  assert.equal(evidenceIsGrounded("prologue 沒有 sw s1，epilogue 也沒有 lw s1", source, 3), true);
+  assert.equal(evidenceIsGrounded("prologue 沒有保存 s7，epilogue 沒有還原", source, 3), false);
+});
+
+test("暫存器用字邊界比對，不會在更長的名字裡誤命中", () => {
+  const source = "    mv      s10, a1\n";
+  assert.equal(evidenceIsGrounded("prologue 沒有保存 s1", source, 1), false);
+  assert.equal(evidenceIsGrounded("prologue 沒有保存 s10", source, 1), true);
+});
+
 test("evidence 沒有識別字時，退而看行號是否存在", () => {
   const source = "a\nb\nc\n";
   assert.equal(evidenceIsGrounded("第 2 行", source, 3), true);
@@ -303,6 +317,32 @@ test("規則的 languages：省略時兩種語言都適用", () => {
   assert.deepEqual(byId["c-only"], ["c"]);
   assert.deepEqual(byId["nonsense-languages"], ["c", "asm"]);
   assert.equal(problems.length, 1, "只有無效值那條該產生警告");
+});
+
+test("兩種語言的 system prompt 都要求回報語法錯誤", () => {
+  // 語法錯誤沒有執行時的觸發時序，所以 DISCIPLINE 那條「講不出 trigger_condition
+  // 就不要報」必須明確為它開一個例外，否則模型會照紀律把語法錯誤吞掉。
+  for (const [language, arch] of [["c", null], ["asm", archFacts("riscv32-andes-v5")]]) {
+    const prompt = systemPrompt(language, arch);
+    assert.match(prompt, /語法/, `${language}: 值得回報的清單要包含語法`);
+    assert.match(prompt, /syntax-error/, `${language}: 要指定 rule_id`);
+    assert.doesNotMatch(
+      prompt,
+      /本來就會抓到的語法/,
+      `${language}: 不該再叫模型跳過語法錯誤`,
+    );
+  }
+});
+
+test("沒有規則時，system prompt 把範圍限縮成只檢查語法", () => {
+  const normal = systemPrompt("c", null, false);
+  assert.doesNotMatch(normal, /只回報語法與型別錯誤/);
+
+  const syntaxOnly = systemPrompt("c", null, true);
+  assert.match(syntaxOnly, /只回報語法與型別錯誤/);
+  assert.match(syntaxOnly, /其他一律不要回報/);
+  // 規則還在的時候不該被誤觸發 —— 這是「退化」不是「取代」。
+  assert.match(syntaxOnly, /語法/);
 });
 
 test("組語的 system prompt 帶入架構事實，C 的不帶", () => {

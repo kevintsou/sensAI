@@ -107,15 +107,15 @@ class Controller {
 
     // 只送這個語言適用的規則。把 C 的規則送去審組語只會製造誤報。
     const rules = this.rules.filter((r) => r.languages.includes(language));
-    if (rules.length === 0) {
-      // 沒有規則的話結果會泛泛到沒有價值，與其送出去燒錢不如先擋下來。
-      this.panel.setState({
-        kind: "skipped",
-        file: path.basename(filePath),
-        reason: `沒有適用於${LANGUAGE_LABEL[language]}的規則。執行「sensAI: Initialize Project」建立 .sensai/rules.yaml。`,
-      });
-      this.setStatus("$(gear) sensAI", "沒有規則");
-      return;
+    // 沒有規則時不整個跳過，改成只做語法檢查（見 prompt.ts 的 SYNTAX_ONLY）。
+    // 泛泛的通用意見確實不值得打擾作者，但語法錯誤的對錯不需要專案知識，
+    // 而且不能假設這台機器上裝了編譯器或 clangd。
+    const syntaxOnly = rules.length === 0;
+    if (syntaxOnly) {
+      this.output.appendLine(
+        `[review] 沒有適用於${LANGUAGE_LABEL[language]}的規則，本次只檢查語法。` +
+          `執行「sensAI: Initialize Project」建立 .sensai/rules.yaml。`,
+      );
     }
 
     const blocked = blockedPaths(ctx, this.config, root);
@@ -133,9 +133,11 @@ class Controller {
     this.inFlight.add(filePath);
     this.panel.setState({
       kind: "reviewing",
-      file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${rules.length} 條規則）`,
+      file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${
+        syntaxOnly ? "沒有規則，只檢查語法" : `${rules.length} 條規則`
+      }）`,
     });
-    this.setStatus("$(sync~spin) sensAI", "審查中");
+    this.setStatus("$(sync~spin) sensAI", syntaxOnly ? "只檢查語法（沒有規則）" : "審查中");
 
     const started = Date.now();
     try {

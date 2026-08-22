@@ -2,6 +2,13 @@ import { SourceLanguage } from "./language";
 
 export type Severity = "error" | "warning" | "info";
 
+/**
+ * 語法與型別錯誤不是由 .sensai/rules.yaml 觸發的，但也不該顯示成「無規則」——
+ * 那會跟模型自己判斷的通用問題混在一起。給它一個固定的 rule_id，
+ * 面板上就能一眼看出這則是編譯期問題，不是硬體規則問題。
+ */
+export const SYNTAX_RULE_ID = "syntax-error";
+
 export interface Rule {
   id: string;
   severity: Severity;
