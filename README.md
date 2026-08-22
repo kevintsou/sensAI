@@ -9,35 +9,108 @@ VS Code 擴充。存檔 `.c` 或 `.s` 時用 AI 做一次單檔 code review，�
 
 ---
 
-## 快速開始
+## 在本機跑起來
+
+需要 Node 18 以上，以及 [Claude Code Router](https://github.com/musistudio/claude-code-router)。
 
 ```bash
+git clone -b claude/vscode-ai-assistant-design-8tmteq \
+    https://github.com/kevintsou/sensAI.git
+cd sensAI
 npm install
-npm run build
+
+# 確認 CCR 有在跑
+ccr status || ccr start
+curl -s http://127.0.0.1:3456/v1/messages -o /dev/null -w '%{http_code}\n'
+
+# 第一次審查
+npm run review -- examples/uart_dma.c
 ```
 
-在 VS Code 開啟這個資料夾，按 F5 啟動 Extension Development Host。
+`npm run review` 會先編譯再執行，不用另外 build。
 
-需要 [Claude Code Router](https://github.com/musistudio/claude-code-router) 在
-`http://127.0.0.1:3456` 執行。沒開的話擴充會靜默停用審查，狀態列顯示 `$(circle-slash) sensAI`，
-不會跳錯誤視窗。
+---
 
-### 先驗證想法再投入
+## 怎麼驗證
 
-`examples/` 下有兩個埋好錯誤的檔案，各自在檔尾列出應該與不應該被回報的項目：
+有兩條路。**調規則跟 prompt 請走命令列**，快很多；VS Code 那條是最後確認整合。
 
-| 檔案 | 埋的錯誤 | 誘餌 |
+### 一、命令列（調規則用這個）
+
+```bash
+npm run review -- examples/uart_dma.c
+npm run review -- examples/uart_dma.s
+```
+
+跑的是跟擴充完全相同的流程 —— 同一個 context builder、同一組 prompt、
+同一個 tool schema、同一層過濾。改完 `rules.yaml` 直接重跑，不用重開編輯器。
+
+```bash
+# 不呼叫 CCR，只看實際送出去的 prompt 長什麼樣
+npm run review -- examples/uart_dma.s --show-prompt
+
+# 換路由（便宜的模型先粗調，好模型再確認）
+npm run review -- examples/uart_dma.c --model background
+
+# 換架構
+npm run review -- boot.s --arch armv7e-m
+
+# 串接用
+npm run review -- src/uart.c --json | jq '.kept[].rule_id'
+```
+
+### 審查你們自己的專案
+
+CLI 會從受審檔案往上找含 `.sensai/` 的目錄當專案根目錄，
+所以可以站在 sensAI 這個 repo 裡去審別的專案的檔案：
+
+```bash
+# 在你們的韌體專案裡放一份規則
+mkdir -p ~/fw/.sensai
+cp .sensai/rules.yaml .sensai/config.yaml ~/fw/.sensai/
+$EDITOR ~/fw/.sensai/rules.yaml        # 換成你們真正的規則
+
+# 從 sensAI repo 裡審那邊的檔案
+npm run review -- ~/fw/src/uart.c
+# → root 會顯示 /home/you/fw，規則與 include 解析都用那邊的
+
+# 自動偵測不準時手動指定
+npm run review -- ~/fw/src/uart.c --root ~/fw
+```
+
+輸出開頭那行會印出 `root`、載入幾條規則、附帶幾個 include ——
+**先確認這三個數字合理再看意見內容**。規則 0 條或 include 0 個的話，
+後面的結果沒有參考價值。
+
+`examples/` 下的兩個檔案各自埋了錯誤，也放了誘餌：
+
+| 檔案 | 埋的錯誤 | 誘餌（不該被報） |
 |---|---|---|
-| `uart_dma.c` | 6 個（W1C 誤用、缺 volatile、DMA 沒 clean cache、ISR 裡 malloc、RMW 沒關中斷、空迴圈延遲） | 3 段 |
-| `uart_dma.s` | 7 個（缺 fence、W1C 誤用、callee-saved 沒存、堆疊沒對齊、ra 沒保存、堆疊不平衡、ABI 不符） | 3 段 |
+| `uart_dma.c` | 6 個：W1C 誤用、缺 volatile、DMA 沒 clean cache、ISR 裡 malloc、RMW 沒關中斷、空迴圈延遲 | 3 段 |
+| `uart_dma.s` | 7 個：缺 fence、W1C 誤用、callee-saved 沒存、堆疊沒對齊、`ra` 沒保存、堆疊不平衡、ABI 不符 | 3 段 |
 
-開啟後存檔，比對檔案末尾的期待結果：
+期待結果寫在各檔案末尾，逐條對：
 
-- 都抓到，且沒有誤報那些誘餌 → prompt 與規則的方向對了
-- 漏抓 → 調整對應規則的 `rule` 措辭，或補 `examples`
-- 誤報 → 該規則需要補 `except`
+| 結果 | 代表什麼 | 怎麼修 |
+|---|---|---|
+| 都抓到、誘餌都沒報 | 方向對了 | 換成你們真的踩過坑的檔案再跑一次 |
+| 漏抓 | 規則講得不夠具體 | 調 `rule` 措辭，或補 `examples` 的正反範例 |
+| 誤報誘餌 | 規則涵蓋太寬 | 給那條規則補 `except` |
+| 意見很空泛 | prompt 的紀律沒生效 | 看 `--show-prompt`，確認規則真的有被送進去 |
+| 被大量濾除 | 模型在捏造識別字 | 濾除原因會印出來；`evidence-not-found` 多代表這條路由的模型不夠力 |
 
-拿你們**真的踩過坑的檔案**重跑一次這個流程，比讀任何文件都有用。
+**最有價值的一步：** 拿你們當年花很久才抓到的那幾個檔案來跑。
+抓得到，剩下都是包裝問題；抓不到，該調的是 prompt 跟上下文，而你只花了一天。
+
+### 二、VS Code（確認整合用）
+
+在 VS Code 開啟這個資料夾，按 F5 —— `.vscode/launch.json` 會把 sensAI 專案本身
+當成受測 workspace 開起來，所以 `.sensai/rules.yaml` 跟 `examples/` 直接就在裡面。
+
+在新視窗開 `examples/uart_dma.c`，存檔，看側邊欄的 sensAI 面板。
+
+CCR 沒開的話擴充會靜默停用審查，狀態列顯示 `$(circle-slash) sensAI`，不會跳錯誤視窗 ——
+這本身也是一個該驗的行為。
 
 ---
 

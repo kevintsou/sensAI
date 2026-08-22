@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run sensAI",
+      "type": "extensionHost",
+      "request": "launch",
+      // 把 sensAI 專案本身當成受測 workspace 開啟：
+      // .sensai/rules.yaml 與 examples/ 都在裡面，開了就能直接存檔驗證。
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: build"
+    }
+  ]
+}

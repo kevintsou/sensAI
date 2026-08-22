@@ -8,4 +8,4 @@ dist/
 
 # 稽核日誌是本機記錄。
 .sensai/sent.log
-out-test/
+out/

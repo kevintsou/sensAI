@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import * as http from "node:http";
 
-import { requestReview, EndpointUnavailableError } from "../out-test/review.js";
+import { requestReview, EndpointUnavailableError } from "../out/review.js";
 
 const CTX = {
   filePath: "/proj/src/uart.c",

@@ -4,13 +4,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildContext } from "../out-test/context.js";
-import { evidenceIsGrounded, filterFindings } from "../out-test/filter.js";
-import { loadRules } from "../out-test/rules.js";
-import { buildUserMessage, systemPrompt } from "../out-test/prompt.js";
-import { detectLanguage } from "../out-test/language.js";
-import { archFacts } from "../out-test/abi.js";
-import { muteKey } from "../out-test/mutes.js";
+import { buildContext } from "../out/context.js";
+import { evidenceIsGrounded, filterFindings } from "../out/filter.js";
+import { loadRules } from "../out/rules.js";
+import { buildUserMessage, systemPrompt } from "../out/prompt.js";
+import { detectLanguage } from "../out/language.js";
+import { archFacts } from "../out/abi.js";
+import { muteKey } from "../out/mutes.js";
 
 const ROOT = "/proj";
 
