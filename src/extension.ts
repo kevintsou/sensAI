@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
@@ -10,6 +11,7 @@ import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
 import { EndpointUnavailableError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
+import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
 import { Finding, ReviewContext, Rule } from "./types";
 
 interface Settings {
@@ -105,6 +107,16 @@ class Controller {
 
     // 只送這個語言適用的規則。把 C 的規則送去審組語只會製造誤報。
     const rules = this.rules.filter((r) => r.languages.includes(language));
+    if (rules.length === 0) {
+      // 沒有規則的話結果會泛泛到沒有價值，與其送出去燒錢不如先擋下來。
+      this.panel.setState({
+        kind: "skipped",
+        file: path.basename(filePath),
+        reason: `沒有適用於${LANGUAGE_LABEL[language]}的規則。執行「sensAI: Initialize Project」建立 .sensai/rules.yaml。`,
+      });
+      this.setStatus("$(gear) sensAI", "沒有規則");
+      return;
+    }
 
     const blocked = blockedPaths(ctx, this.config, root);
     if (blocked.length > 0) {
@@ -229,6 +241,63 @@ class Controller {
     }
   }
 
+  /**
+   * 建立 `.sensai/` 骨架。
+   *
+   * 規則不隨擴充散布 —— 那是專案的資產。但裝了 vsix 的人手上不會有
+   * 任何範本，這個指令補掉那個缺口。
+   */
+  async initProject(): Promise<void> {
+    const root = this.workspaceRoot;
+    if (!root) {
+      void vscode.window.showWarningMessage("sensAI：請先開啟一個資料夾。");
+      return;
+    }
+    const dir = path.join(root, ".sensai");
+    const files: Array<[string, string]> = [
+      ["rules.yaml", RULES_TEMPLATE],
+      ["config.yaml", CONFIG_TEMPLATE],
+      [".gitignore", GITIGNORE_TEMPLATE],
+    ];
+
+    const existing = files.filter(([name]) => fs.existsSync(path.join(dir, name)));
+    if (existing.length > 0) {
+      const names = existing.map(([n]) => n).join("、");
+      const pick = await vscode.window.showWarningMessage(
+        `.sensai/ 底下已經有 ${names}。要覆蓋嗎？`,
+        { modal: true },
+        "只建立缺少的",
+        "全部覆蓋",
+      );
+      if (pick === undefined) {
+        return;
+      }
+      if (pick === "只建立缺少的") {
+        for (const [name, content] of files) {
+          const file = path.join(dir, name);
+          if (!fs.existsSync(file)) {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(file, content);
+          }
+        }
+        this.reloadProjectFiles(true);
+        return;
+      }
+    }
+
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [name, content] of files) {
+      fs.writeFileSync(path.join(dir, name), content);
+    }
+    this.reloadProjectFiles(true);
+
+    const doc = await vscode.workspace.openTextDocument(path.join(dir, "rules.yaml"));
+    await vscode.window.showTextDocument(doc);
+    void vscode.window.showInformationMessage(
+      "sensAI：已建立 .sensai/。裡面的規則只是格式示範，請換成你們專案真正的規則。",
+    );
+  }
+
   async exportFalsePositives(): Promise<void> {
     if (!this.mutes) {
       return;
@@ -295,6 +364,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void controller.review(doc);
       }
     }),
+    vscode.commands.registerCommand("sensai.initProject", () => controller.initProject()),
     vscode.commands.registerCommand("sensai.exportFalsePositives", () =>
       controller.exportFalsePositives(),
     ),

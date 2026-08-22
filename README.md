@@ -114,6 +114,66 @@ CCR 沒開的話擴充會靜默停用審查，狀態列顯示 `$(circle-slash) s
 
 ---
 
+## 裝進 VS Code
+
+F5 只是開發用的。要真的用在日常工作上，打包成 `.vsix` 安裝。
+
+### 打包與安裝
+
+```bash
+npm run package                          # 產出 sensai.vsix（約 120 KB）
+code --install-extension sensai.vsix
+```
+
+也可以在 VS Code 裡按 `Ctrl+Shift+P` →「Extensions: Install from VSIX...」。
+
+裝完重載視窗，右下角狀態列會出現 `sensAI`。
+
+### 給團隊用
+
+`.vsix` 是一個檔案，最簡單的散布方式就是丟進共用磁碟或 release 附件，
+大家各自 `code --install-extension`。要更正式的話可以架私有 registry（Open VSX），
+但團隊規模不大的話先不必。
+
+**規則不隨擴充散布** —— `.vsix` 裡沒有任何 `.sensai/` 內容。規則是專案的資產，
+跟著各專案的 repo 走，`git pull` 就更新。擴充升級與規則更新是兩件獨立的事，
+這樣才對得起「規則由開發者透過版本控管維護」這條。
+
+### 在你們的韌體專案裡啟用
+
+開啟專案，`Ctrl+Shift+P` →「sensAI: Initialize Project」，會建立：
+
+```
+.sensai/
+├── rules.yaml      # 兩條格式示範，換成你們真正的規則
+├── config.yaml     # 隱私閘門 + assembly.arch
+└── .gitignore      # 排除 local-mutes.json 與 sent.log
+```
+
+**`rules.yaml` 跟 `config.yaml` 要進版控**，`.gitignore` 已經幫你把
+本機靜音清單與稽核日誌排掉了。
+
+沒有適用規則的時候，擴充不會送出請求 —— 那種結果泛泛到沒有價值，
+不如先擋下來。狀態列會顯示 `$(gear) sensAI`。
+
+### 設定放哪裡
+
+| 設定 | 放哪 | 為什麼 |
+|---|---|---|
+| `sensai.endpoint`、`sensai.model` | 使用者設定 | 每台機器的 CCR 裝法與路由偏好不同 |
+| `sensai.enabled` | 使用者或工作區皆可 | |
+| `privacy.*`、`assembly.arch` | `.sensai/config.yaml` | 團隊共同的決定，要進版控 |
+
+不要把 `endpoint` 寫進工作區設定再 commit —— 別人的 CCR 未必在同一個埠。
+
+### 已知限制
+
+**多根工作區只看第一個資料夾。** `.sensai/` 會從
+`workspaceFolders[0]` 找，所以如果你同時開了韌體專案跟別的東西，
+順序會影響結果。單一資料夾的用法不受影響。
+
+---
+
 ## 設定
 
 ### 每台機器（VS Code settings）

@@ -24,6 +24,10 @@
         "icon": "$(search)"
       },
       {
+        "command": "sensai.initProject",
+        "title": "sensAI: Initialize Project"
+      },
+      {
         "command": "sensai.exportFalsePositives",
         "title": "sensAI: Export False Positive Report"
       },
@@ -107,7 +111,9 @@
     "pretest": "npm run compile",
     "compile": "tsc --outDir out",
     "prereview": "npm run compile",
-    "review": "node scripts/review.mjs"
+    "review": "node scripts/review.mjs",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package --out sensai.vsix"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
@@ -118,6 +124,11 @@
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kevintsou/sensAI.git"
   }
 }

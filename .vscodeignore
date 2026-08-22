@@ -1,0 +1,15 @@
+# 只有 dist/extension.js 與 media/ 需要進 vsix。
+# esbuild 已經把相依套件打包進去，node_modules 不用帶。
+.vscode/**
+node_modules/**
+out/**
+src/**
+test/**
+scripts/**
+examples/**
+.sensai/**
+**/*.ts
+**/*.map
+tsconfig.json
+.gitignore
+SPEC.md
