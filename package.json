@@ -113,7 +113,8 @@
     "prereview": "npm run compile",
     "review": "node scripts/review.mjs",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package --out sensai.vsix"
+    "package": "vsce package --out sensai.vsix",
+    "mock": "node scripts/mock-router.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

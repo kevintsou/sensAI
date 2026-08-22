@@ -9,6 +9,12 @@ export interface ReviewClientOptions {
   timeoutMs: number;
   /** 組語審查時要注入的 ABI 事實。C 檔案用不到。 */
   archId: string;
+  /**
+   * CCR 不驗證，所以預設是佔位字串。
+   * 想略過 CCR 直接打 Anthropic API 時，設 ANTHROPIC_API_KEY 並把
+   * endpoint 指向 https://api.anthropic.com。
+   */
+  apiKey?: string;
 }
 
 /** CCR 沒啟動時丟這個，讓上層可以靜默降級而不是跳錯誤視窗。 */
@@ -131,7 +137,8 @@ export async function requestReview(
 ): Promise<Finding[]> {
   const client = new Anthropic({
     baseURL: opts.endpoint,
-    apiKey: "ccr", // CCR 不驗證，但 SDK 要求非空字串
+    // CCR 不驗證，但 SDK 要求非空字串。指向真正的 Anthropic API 時才需要真的 key。
+    apiKey: opts.apiKey || process.env.ANTHROPIC_API_KEY || "ccr",
     timeout: opts.timeoutMs,
     maxRetries: 1, // CCR 沒開的時候要快點失敗，不要卡著重試
   });

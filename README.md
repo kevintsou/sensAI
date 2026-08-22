@@ -31,6 +31,51 @@ npm run review -- examples/uart_dma.c
 
 ---
 
+## 沒有 CCR 的話
+
+兩個替代方案。
+
+### 一、假的 router（不需要任何金鑰）
+
+```bash
+npm run mock          # 另開一個終端機，預設就聽 3456
+npm run review -- examples/uart_dma.c
+```
+
+它是 CCR 的替身，不用改任何設定。**但它不會真的審查程式碼** ——
+意見是從送進去的 prompt 裡挑幾行湊出來的，訊息都標了「[假的]」。
+
+用途是驗**管線**：include 有沒有被帶進去、行號對不對得上、
+過濾層有沒有在做事、規則有沒有依語言篩選。它還會故意塞兩則壞意見
+（行號超出範圍、捏造的識別字），讓你看得到過濾層在工作。
+
+順便可以驗失敗路徑：
+
+```bash
+npm run mock -- --mode no-tool   # 路由的模型不支援 tool use
+npm run mock -- --mode empty     # 沒有發現問題
+npm run mock -- --mode error     # 路由回 500
+npm run mock -- --mode slow      # 拖 30 秒，驗逾時
+```
+
+把假 router 關掉再跑一次，就能驗「CCR 沒開時優雅降級」——
+CLI 會提示去確認 CCR，擴充則是狀態列顯示 `$(circle-slash) sensAI`，不跳視窗。
+
+### 二、直接打 Anthropic API（需要 API key）
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run review -- examples/uart_dma.c --endpoint https://api.anthropic.com
+```
+
+`ANTHROPIC_API_KEY` 有設的話會取代預設的佔位字串。這條路會真的呼叫模型，
+所以**意見的品質是真的**，可以用來驗規則寫得好不好 —— 只是繞過了 CCR 的路由與成本控管。
+
+擴充也吃同一個環境變數，但要讓 VS Code 看得到 —— macOS/Linux 從終端機用
+`code .` 啟動，或寫進 shell 的 profile 再重開。
+
+---
+
 ## 怎麼驗證
 
 有兩條路。**調規則跟 prompt 請走命令列**，快很多；VS Code 那條是最後確認整合。
