@@ -1,109 +1,64 @@
 # sensAI
 
-VS Code 的 AI 程式碼糾錯工具，針對 ARM / Andes AndeStar V5 韌體開發。
-在你打字的當下檢查 `.c` 與 `.s` 的語法與語意問題。
+VS Code 擴充。存檔 `.c` 時，用 AI 做一次單檔 code review，
+針對 ARM / Andes AndeStar V5 韌體開發。
 
-判斷者是 AI。組譯器與編譯器只負責語法，並作為 AI 的輸入之一。
+差異化不在 AI，在 `rules.yaml` —— 那裡放的是這個專案的硬體特性與團隊慣例，
+是通用工具永遠不會知道的東西。沒有規則的話，這只是一個比較差的 Copilot。
 
 ---
 
-## 1. 運作流程
+## 流程
 
 ```
-打字停頓 0.7s
-  ├─ as / gcc -fsyntax-only  →  語法錯誤（~100ms，直接畫線）
-  └─ AI 快掃                 →  改動的幾行 + 所在函式 + 上面的語法錯誤
-                                 串流回傳，第一個問題出來就畫線
-
-存檔
-  └─ AI 深掃                 →  整個函式或檔案，走能力較好的路由
-                                 產出的修補先套用並組譯一次，通過才顯示為 Quick Fix
+存檔 .c
+  → 讀檔案內容
+  → 抓出 #include "xxx.h" 指到的專案內 header，一併附上
+  → 組 prompt：檔案 + headers + rules.yaml
+  → 呼叫 CCR，tool use 取回結構化 findings
+  → 顯示在側邊面板
 ```
 
-先跑語法有兩個用處：語法錯誤本來就該由組譯器回答（100% 準確、100ms 內），
-而且把語法錯誤一起餵給 AI，可以避免它對著一段還沒打完的程式碼亂猜語意，
-也不會重複回報編譯器已經抓到的東西。
+`#include` 只處理引號式（專案內），`<>` 的系統 header 忽略。
+不需要 include path 設定，不需要 build system 整合。
 
-**未改動的區塊沿用上次結果**，不重複送。這是控制延遲與成本的主要手段。
-
----
-
-## 2. AI 收到什麼
-
-每次請求送出的內容，按優先序：
-
-1. 改動的 hunk 及其所在函式的完整內容
-2. 該檔案的語法檢查結果（若有）
-3. **命中的規則**（見 §4，經過路徑與關鍵字過濾）
-4. 架構事實 —— 目標架構的暫存器清單、ABI 表、呼叫慣例（內建，見 §4.4）
-5. 相鄰函式的簽章
-
-快掃與深掃使用不同的 context 預算：快掃從嚴，只送真的踩得到的；
-深掃可以放寬。
+這一步不能省。韌體 C 重度依賴 macro 與 header，沒有這些
+AI 會對 `HAL_UART_Transmit(&huart1, ...)` 這類呼叫給出聽起來合理但錯誤的判斷。
 
 ---
 
-## 3. 誤報防線
+## Finding 的結構
 
-AI 作為主判斷者，誤報是唯一會殺死這個工具的東西。
-波浪線畫錯兩三次，使用者就會全部無視。
-
-### 3.1 強制具體理由
-
-回報結果透過 tool use 取得，schema 強制每個 finding 填滿：
+透過 tool use 取回，schema 強制每個 finding 填滿：
 
 | 欄位 | 內容 |
 |---|---|
 | `line` | 哪一行 |
 | `trigger_condition` | 什麼情況下會出事 —— 要具體，例：「當 ISR 在 40〜42 行之間觸發」 |
-| `consequence` | 會造成什麼 —— 例：「讀到舊值」「堆疊回到錯誤位置」 |
-| `evidence` | 引用程式碼中實際存在的行號或識別字 |
+| `consequence` | 會造成什麼 —— 例：「讀到舊值」「DMA 搬到過期資料」 |
+| `evidence` | 引用檔案中實際存在的行號或識別字 |
+| `rule_id` | 命中哪條規則（若有） |
 
-主要效果不在事後過濾，而在**改變模型的行為**：被要求說明具體失效情境時，
-講不出來的意見就不會被提出來，那些「這裡可能要注意一下」會自己消失。
+主要作用不是事後過濾，是**改變模型的行為**：被要求說明具體失效情境時，
+講不出來的意見就不會被提出來 ——「這裡建議加強錯誤處理」這類
+正確但無用的話會自己消失。
 
-事後再過濾一次：`evidence` 引用不到真實存在的識別字、或 `trigger_condition`
-沒有具體條件的，直接丟棄。
-
-這四個欄位同時就是 hover 要顯示的內容。使用者看到
-「當 ISR 在 40〜42 行之間觸發時會讀到舊值」，一秒就能自行判斷是不是誤報 ——
-比只寫「缺 volatile」有用得多。
-
-### 3.2 使用者只有本機靜音權
-
-規則庫由開發者透過版本控管維護（§4）。使用者不修改規則，但需要能立即止血：
-
-| | 誰能改 | 進版控 | 是否影響 AI |
-|---|---|---|---|
-| 規則庫 | 開發者，走 PR | ✅ | 送進 context |
-| 本機靜音 | 使用者 | ❌（`.gitignore`） | 否，純粹不顯示 |
-| 誤報回報 | 使用者 | ❌ | 否，可匯出給開發者 |
-
-使用者標記一次誤報會做兩件事：本機立刻閉嘴（不必等發版），
-同時留下一筆可匯出的記錄。開發者定期收集這些記錄，決定是否調整規則 ——
-但決定權在版控那一側。
+事後再丟掉一次：`evidence` 引用不到真實存在的識別字的，直接濾除。
 
 ---
 
-## 4. 規則庫
+## rules.yaml
 
-### 4.1 自然語言規則
-
-判斷者是 AI，所以規則直接用自然語言寫，不需要 AST matcher 或 DSL。
-資深工程師花幾分鐘就能加一條。
+判斷者是 AI，規則直接用自然語言寫，不需要 AST matcher 或 DSL。
 
 ```yaml
-# .sensai/rules/dma.yaml
+# .sensai/rules.yaml
 - id: dma-cache-maintenance
-  schema: 1
-  applies_to: ["src/dma/**", "**/*_dma.c"]
-  triggers: ["DMA_", "dma_start"]      # 程式碼出現這些關鍵字才注入
   severity: error
   rule: |
     本專案 SoC 的 D-cache 是 write-back。DMA buffer 在啟動 DMA 前必須先
     clean（寫方向），或在讀取結果前 invalidate（讀方向）。
-    要呼叫 dma_cache_clean() / dma_cache_invalidate()，
-    不要只下 __DSB()，那不夠。
+    要呼叫 dma_cache_clean() / dma_cache_invalidate()，不要只下 __DSB()。
   examples:
     bad: |
       memcpy(tx_buf, data, len);
@@ -112,145 +67,101 @@ AI 作為主判斷者，誤報是唯一會殺死這個工具的東西。
       memcpy(tx_buf, data, len);
       dma_cache_clean(tx_buf, len);
       dma_start(DMA_CH0, tx_buf, len);
-```
 
-`examples` 不要省略。一組正反範例對 LLM 準確度的提升，
-遠大於把 `rule` 文字寫得更長。
-
-### 4.2 規則也要能表達「不要報什麼」
-
-團隊層級的例外必須有地方放，否則會被迫塞進使用者端：
-
-```yaml
 - id: volatile-shared-state
-  schema: 1
   severity: warning
   rule: |
     被 ISR 與主程式同時存取的變數必須標 volatile。
   except: |
     命名以 _isr 結尾的變數是 ISR 專用副本，不算共享，不要報。
-    ring buffer 的 head/tail 各有單一 owner，也不算（見 docs/ringbuf.md）。
 ```
 
-「該報什麼」與「不該報什麼」都在同一份受控文件裡，責任歸屬清楚。
+`examples` 不要省略 —— 一組正反範例對準確度的提升，
+遠大於把 `rule` 寫得更長。
 
-### 4.3 規則的挑選與載入
+`except` 讓「不該報什麼」跟「該報什麼」待在同一份文件裡。
 
-規則庫長到數十上百條後，全部送出會撐爆 context 也拖慢快掃。
-用 `applies_to`（路徑 glob）與 `triggers`（關鍵字）過濾，
-只送這段程式碼真的踩得到的規則。字串比對即可，不需要向量檢索。
-
-規則存放於專案 repo 的 `.sensai/rules/`，隨 `git pull` 生效。
-LSP server 啟動時載入，並 watch 檔案變更做熱重載。無須任何散布機制。
-
-### 4.4 事實與規則分離
-
-架構通用的內容 —— ARM AAPCS 的 caller/callee-saved 清單、RISC-V 呼叫慣例、
-暫存器別名、指令集 —— 每個專案都一樣，內建於 extension 中作為
-**架構事實**自動注入 AI context。
-
-**規則**（判斷什麼是問題）一律走專案 repo，由開發者控制。
-事實不是規則，不影響治理邊界，但避免每個專案重寫一次 ABI 表。
-
-### 4.5 規則的來源
-
-手寫規則需要人有意識地坐下來寫，實務上難以持續。主要來源應該是：
-
-- **從剛修完的 bug 長出來** —— 提供一個動作：把修正的 diff 交給 AI 產生規則草稿，
-  開發者修改後提 PR。這樣長出來的規則都是團隊真的踩過的坑。
-- **從誤報回報長出來** —— 累積的回報記錄顯示某類判斷經常被否決時，
-  提示開發者考慮補一條 `except`。
-
-### 4.6 CI 上的 dry-run
-
-規則走 PR，所以品質檢查也放在 PR 上。新增或修改規則時，
-CI 在現有 codebase 跑一次，回報這條規則會產生多少 finding：
-
-- 命中 2 處 → 合理
-- 命中 300 處 → 規則寫太寬，或專案本來就這樣寫；需要在 review 中處理
-
-這同時能抓到「改了一條舊規則，結果別處爆掉」。
+**規則由開發者透過版本控管維護，使用者不修改。**
+檔案放在專案 repo，`git pull` 就生效。v1 全部串進 prompt，
+不做挑選機制 —— 那是規則超過數十條之後才需要的。
 
 ---
 
-## 5. 模型後端
+## 模型後端
 
 透過 Claude Code Router，使用官方 SDK：
 
 ```ts
 const client = new Anthropic({
-  baseURL: config.llm.endpoint,   // 預設 http://127.0.0.1:3456
-  apiKey: "ccr",                  // CCR 不驗證，但 SDK 要求非空
+  baseURL: "http://127.0.0.1:3456",
+  apiKey: "ccr",                    // CCR 不驗證，SDK 要求非空
 });
 ```
 
-CCR 會路由到不同 provider，因此有四個限制：
+CCR 會路由到不同 provider，因此：
 
-1. **不用 structured outputs** —— `output_config.format` 經過 CCR 的 transformer
-   不保證轉得過去。改用 **tool use** 取得結構化 finding，相容性遠高。
-2. **不依賴 prompt caching** —— 非 Anthropic 後端沒有這個機制。
-   成本控制靠「只送必要內容 + 未改動區塊沿用結果」。
-3. **CCR 未啟動時優雅降級** —— 語法檢查照常，AI 層靜默停用，
-   僅狀態列顯示，不跳錯誤視窗。
-4. **模型能力不一** —— 深掃產出的修補必須先組譯驗證才顯示，這不是加分項。
-
-CCR 的 `model` 欄位是路由 key，快掃與深掃分流：
-
-```yaml
-llm:
-  model_quick: background        # 快掃 —— 便宜快速
-  model_deep:  claude-opus-5     # 深掃
-```
+- **用 tool use，不用 structured outputs** —— `output_config.format` 經過
+  CCR 的 transformer 不保證轉得過去，tool use 相容性遠高
+- **不依賴 prompt caching** —— 非 Anthropic 後端沒有這個機制
+- **CCR 未啟動時** 靜默停用，狀態列顯示即可，不跳錯誤視窗
 
 ---
 
-## 6. 隱私
+## 顯示
 
-韌體原始碼通常受 NDA 保護，外送控制是必要功能。
+結果進側邊面板，**不畫錯誤波浪線**。
+
+波浪線在編輯器語彙裡代表「這是錯的」，是斷言；AI 給不起那個確定性。
+Copilot NES 也是用 gutter 箭頭而非波浪線，理由相同 ——
+同樣猜錯一次，提議的信任損失遠小於斷言。
+
+每個 finding 顯示 `trigger_condition` 與 `consequence`，
+讓使用者能自行判斷是不是誤報。
+
+使用者可以標記誤報：本機立刻靜音（不進版控），同時留一筆可匯出的記錄，
+供開發者日後調整規則。
+
+---
+
+## 隱私
+
+韌體原始碼通常受 NDA 保護。
 
 ```yaml
 privacy:
-  mode: opt-in                   # opt-in | opt-out | disabled
-  never_send:
-    - "src/secure/**"
-    - "**/crypto/**"
+  never_send: ["src/secure/**", "**/crypto/**"]
   audit_log: .sensai/sent.log
 ```
 
-- `mode: disabled` 時完全不連外，只剩語法檢查
-- `never_send` 匹配的檔案完全跳過 AI 層，並在狀態列標示
-- 每次外送寫入稽核日誌
+匹配的檔案完全跳過，狀態列標示。每次外送寫入稽核日誌。
 
 ---
 
-## 7. 編輯器整合
+## 明確不做（v1）
 
-實作為 LSP server + 薄的 VS Code client。韌體團隊的編輯器分佈很散
-（VS Code、Vim、AndeSight、Keil），核心邏輯走 LSP 可跨編輯器重用。
+記錄下來以免日後重複討論：
 
-| 來源 | `source` | 預設 severity |
-|---|---|---|
-| 組譯器 / 編譯器 | `sensai` | Error |
-| AI | `sensai-ai` | 依規則的 `severity` |
-
-AI 的診斷使用不同的 `source` 字串，讓使用者能在編輯器設定中單獨過濾掉
-AI 的意見，而保留語法錯誤。
-
-| LSP 能力 | 用途 |
+| 不做 | 理由 |
 |---|---|
-| `publishDiagnostics` | 主要輸出通道 |
-| `codeAction` | Quick Fix（僅顯示通過組譯驗證的修補）、標記誤報 |
-| `hover` | 顯示 `trigger_condition` / `consequence` |
-| `executeCommand` | 手動觸發深掃、匯出誤報回報 |
+| 打字停頓即時檢查 | 韌體的痛是「三天後在板子上發現」，不是「慢了幾秒」。這項佔 60% 工程量，只換回幾秒，且送出的是未完成的程式碼、誤報風險最高 |
+| 語法檢查（`as` / `gcc`） | 交給 clangd。存檔時程式碼多半語法完整 |
+| 修補套用 + 編譯驗證 | review 是意見，不產生可套用的 patch |
+| `.s` 組語 | 價值高但先確認 `.c` 這條路走得通。組語只需 `as -march`，之後加不難 |
+| LSP | 先用最陽春的 VS Code 擴充驗證想法。跨編輯器的需求之後再說 |
+| 規則挑選機制、CI dry-run | 規則超過數十條才需要 |
 
 ---
 
-## 8. 待決
+## 待驗證
 
-- [ ] `.c` 的語法檢查需要 include path 與 defines，但專案使用 AndeSight / Keil
-      等封閉 build system，沒有 `compile_commands.json`。
-      需決定 flags 來源：解析 `.cproject` / `.uvprojx` XML，或手動設定。
-      （`.s` 只需要 `as` 與 `-march`，不受此影響）
-- [ ] `.S`（經過前處理器）的巨集展開如何處理
-- [ ] 快掃的 context 預算上限，需要實測延遲後決定
-- [ ] 多專案共用同一顆 SoC 時，規則的重複問題
+第一步是拿**真的踩過坑的 `.c` 檔**去試，看 AI 抓不抓得到當年那個 bug。
+
+- 抓得到 → 剩下是包裝問題，再決定要不要升級 LSP、加 `.s`
+- 抓不到 → 問題在 prompt 與上下文，此時只損失一天
+
+其他待確認：
+
+- [ ] 單檔 + 專案 header 的上下文是否足夠，或需要再補相鄰的 `.c`
+- [ ] 團隊目前 clangd / cpptools 是否正常運作。若否，
+      補一份 `compile_flags.txt` 可能比 AI 檢查更快解決日常困擾
+- [ ] 追蹤指標：finding 被實際修掉的比例（不是準確率 —— 那沒有 ground truth）
