@@ -177,6 +177,84 @@
           return seq;
       }
 
+- id: hw-poll-without-timeout
+  languages: [c]
+  severity: error
+  rule: |
+    輪詢硬體狀態位元的迴圈必須有逃生路徑。硬體不回應的原因很多 —— 時脈沒開、
+    電源域沒上電、外設卡在錯誤狀態、板子上那顆晶片就是壞了 —— 而沒有上限的
+    while 迴圈碰到這些情況會讓整台機器停住，連 watchdog 都可能餵不到。
+
+    這類迴圈在桌上測試時永遠會過，因為硬體是好的。它只在現場、只在特定板子、
+    只在特定上電順序下才卡住，而且卡住的時候沒有任何訊息，最難查。
+
+    逃生路徑可以是固定的重試次數上限，或是跟系統 tick 比較的 deadline。
+    重點是超時之後要能回報失敗讓呼叫端處理，不是靜靜地繼續往下走。
+
+    註：本專案目前沒有共用的 timeout helper，下面的正確範例用計數上限示範。
+    團隊之後若有統一的等待函式，把這條規則的範例換成那個函式，準確度會更好。
+  except: |
+    等待的是同一顆核心上的軟體旗標（例如另一段程式碼會設定的變數），
+    不是硬體狀態，不適用這條規則。
+    迴圈本身已經有次數上限、deadline 比較，或迴圈內有餵 watchdog 的，
+    不算問題。
+    for 迴圈跑固定次數這種本來就有界的寫法不算問題。
+  examples:
+    bad: |
+      void uart_send_byte(uint8_t b)
+      {
+          while (!(UART0->STATUS & UART_STATUS_TXDONE)) {
+          }
+          UART0->DATA = b;
+      }
+    good: |
+      int uart_send_byte(uint8_t b)
+      {
+          uint32_t spins = UART_TX_MAX_SPINS;
+          while (!(UART0->STATUS & UART_STATUS_TXDONE)) {
+              if (--spins == 0) {
+                  return -1;
+              }
+          }
+          UART0->DATA = b;
+          return 0;
+      }
+
+- id: stack-address-escape
+  languages: [c]
+  severity: error
+  rule: |
+    把區域變數或區域陣列的位址交給生命週期比這個函式更長的東西，函式返回之後
+    那塊堆疊會被下一次呼叫或中斷覆寫，對方拿到的是垃圾。常見的交出方式包括
+    存進全域指標、放進佇列或 descriptor、註冊成 callback 的參數，以及交給 DMA。
+
+    DMA 是最危險的一種，因為 dma_start() 這類介面是非同步的：函式返回時搬移
+    才剛開始，來源緩衝區的堆疊框架已經歸還。症狀是偶爾送出正確資料、偶爾送出
+    上一個函式留下的殘骸，跟時序有關，重現不了。
+
+    這類錯誤編譯器多半不會警告，因為位址的傳遞在型別上完全合法。
+  except: |
+    在函式返回前一定用完的同步用法不算問題 —— 例如把區域緩衝區的位址傳給一個
+    會在返回前處理完的函式。
+    static 或全域宣告的緩衝區不受這條規則限制，它們的生命週期夠長。
+  examples:
+    bad: |
+      void send_status(void)
+      {
+          uint8_t frame[8];
+          build_frame(frame);
+          dma_start(DMA_CH0, frame, sizeof frame);   /* DMA 還在搬，函式已返回 */
+      }
+    good: |
+      static uint8_t frame[8];
+
+      void send_status(void)
+      {
+          build_frame(frame);
+          dma_cache_clean(frame, sizeof frame);
+          dma_start(DMA_CH0, frame, sizeof frame);
+      }
+
 # ---------------------------------------------------------- 組合語言
 
 - id: asm-callee-saved
