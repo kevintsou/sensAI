@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Finding, ReviewContext, Rule, Severity, SYNTAX_RULE_ID } from "./types";
 import { archFacts } from "./abi";
+import { LineRange } from "./diff";
 import { buildUserMessage, systemPrompt } from "./prompt";
 
 export interface ReviewClientOptions {
@@ -9,6 +10,11 @@ export interface ReviewClientOptions {
   timeoutMs: number;
   /** 組語審查時要注入的 ABI 事實。C 檔案用不到。 */
   archId: string;
+  /**
+   * 只審查這幾行（階段一）。null 或省略代表整份檔案（階段二）。
+   * 附上的檔案內容不受影響 —— 判斷改動處是否正確仍然需要完整上下文。
+   */
+  changed?: LineRange[] | null;
   /**
    * CCR 不驗證，所以預設是佔位字串。
    * 想略過 CCR 直接打 Anthropic API 時，設 ANTHROPIC_API_KEY 並把
@@ -157,7 +163,7 @@ export async function requestReview(
         ctx.language === "asm" ? archFacts(opts.archId) : null,
         rules.length === 0,
       ),
-      messages: [{ role: "user", content: buildUserMessage(ctx, rules) }],
+      messages: [{ role: "user", content: buildUserMessage(ctx, rules, opts.changed ?? null) }],
       tools: [FINDINGS_TOOL],
       tool_choice: { type: "tool", name: FINDINGS_TOOL.name },
     });

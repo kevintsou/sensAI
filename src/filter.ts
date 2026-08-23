@@ -1,3 +1,4 @@
+import { LineRange, isInRanges } from "./diff";
 import { DroppedFinding, Finding } from "./types";
 
 const IDENT_RE = /[A-Za-z_][A-Za-z0-9_]{2,}/g;
@@ -78,6 +79,7 @@ export function filterFindings(
   findings: Finding[],
   source: string,
   isMuted: (f: Finding) => boolean,
+  scope: LineRange[] | null = null,
 ): FilterResult {
   const lineCount = source.split("\n").length;
   const kept: Finding[] = [];
@@ -86,6 +88,11 @@ export function filterFindings(
   for (const finding of findings) {
     if (finding.line < 1 || finding.line > lineCount) {
       dropped.push({ finding, reason: "line-out-of-range" });
+      continue;
+    }
+    // 階段一限定在改動範圍內。prompt 已經講了，但模型會飄，這裡再擋一次。
+    if (scope && !isInRanges(finding.line, scope)) {
+      dropped.push({ finding, reason: "outside-changed-lines" });
       continue;
     }
     if (!evidenceIsGrounded(finding.evidence, source, lineCount)) {
@@ -99,8 +106,87 @@ export function filterFindings(
     kept.push(finding);
   }
 
-  kept.sort(
-    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.line - b.line,
-  );
+  kept.sort(bySeverityThenLine);
   return { kept, dropped };
+}
+
+function bySeverityThenLine(a: Finding, b: Finding): number {
+  return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.line - b.line;
+}
+
+export interface SeverityBudget {
+  /** 實際顯示的意見。 */
+  shown: Finding[];
+  /** 超出額度被收起來的意見，依然保留完整內容，只是預設不展開。 */
+  collapsed: Finding[];
+}
+
+/**
+ * 意見太多的時候把低嚴重度的收起來，避免失焦。
+ *
+ * 兩條原則：
+ *
+ * 一、error 永遠不收。就算 error 自己就超過額度也全部顯示 —— 收起一則
+ * error 等於幫使用者決定「這個可以不看」，那不是這個工具該做的決定。
+ * 額度的用意是擋掉 warning 的雜訊，不是擋掉壞消息。
+ *
+ * 二、只有總數超過額度才動作。沒超過就原樣顯示，不要為了「看起來精簡」
+ * 去藏東西 —— 平常就藏的話，使用者會不信任面板上的數字。
+ */
+export function applySeverityBudget(findings: Finding[], cap: number): SeverityBudget {
+  if (cap <= 0 || findings.length <= cap) {
+    return { shown: [...findings], collapsed: [] };
+  }
+  const errors = findings.filter((f) => f.severity === "error");
+  const rest = findings.filter((f) => f.severity !== "error");
+
+  // error 全留；剩下的額度依 severity、行號的既有順序填，填不下的收起來。
+  const room = Math.max(0, cap - errors.length);
+  const shown = [...errors, ...rest.slice(0, room)].sort(bySeverityThenLine);
+  return { shown, collapsed: rest.slice(room) };
+}
+
+/**
+ * 跨階段比對「這是不是同一則意見」用的身分。
+ *
+ * 刻意不含 message：兩個階段是兩次獨立的模型呼叫，同一個問題的措辭幾乎
+ * 一定不同，把 message 算進去就永遠比不出重複（muteKey 含 message 是對的，
+ * 那是同一次回應內的靜音，情況不一樣）。
+ *
+ * 也刻意不做「同規則且行號相近就算同一則」—— 相鄰兩行命中同一條規則是
+ * 很常見的真實情況（例如兩個相鄰的宣告都缺 volatile），那樣會把兩個
+ * 真的問題併成一個。
+ */
+export function findingIdentity(f: Finding, lineText: string): string {
+  const normalized = lineText.trim().replace(/\s+/g, " ");
+  return [f.rule_id ?? "", normalized].join("|");
+}
+
+/**
+ * 合併兩個階段的結果，去掉重複。
+ *
+ * 重複的部分保留 primary（階段一）的版本 —— 那是落在你剛改的行上的意見，
+ * 對當下的你比較有用，而且它先到，換掉會讓面板上的文字莫名其妙跳動。
+ */
+export function mergeStageFindings(
+  primary: Finding[],
+  secondary: Finding[],
+  source: string,
+): { merged: Finding[]; duplicates: number } {
+  const lines = source.split("\n");
+  const identityOf = (f: Finding) => findingIdentity(f, lines[f.line - 1] ?? "");
+  const seen = new Set(primary.map(identityOf));
+
+  const merged = [...primary];
+  let duplicates = 0;
+  for (const f of secondary) {
+    if (seen.has(identityOf(f))) {
+      duplicates++;
+      continue;
+    }
+    seen.add(identityOf(f));
+    merged.push(f);
+  }
+  merged.sort(bySeverityThenLine);
+  return { merged, duplicates };
 }

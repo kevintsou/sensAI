@@ -13,3 +13,4 @@ examples/**
 tsconfig.json
 .gitignore
 SPEC.md
+media/marketplace-icon.svg

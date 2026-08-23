@@ -5,8 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { buildContext } from "../out/context.js";
-import { evidenceIsGrounded, filterFindings } from "../out/filter.js";
-import { loadRules } from "../out/rules.js";
+import {
+  applySeverityBudget,
+  evidenceIsGrounded,
+  filterFindings,
+  mergeStageFindings,
+} from "../out/filter.js";
+import { mergeRanges, parseDiffRanges } from "../out/diff.js";
+import { loadRules, rulesPath } from "../out/rules.js";
 import { buildUserMessage, systemPrompt } from "../out/prompt.js";
 import { detectLanguage } from "../out/language.js";
 import { archFacts } from "../out/abi.js";
@@ -213,6 +219,17 @@ test("rules.yaml 載入：略過壞規則但保留其餘", () => {
   assert.equal(problems.length, 4);
 });
 
+test("可從工作區外載入規則，並支援相對於工作區的路徑", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-rules-path-"));
+  const external = path.join(dir, "shared", "andestar.yaml");
+  fs.mkdirSync(path.dirname(external));
+  fs.writeFileSync(external, "- id: shared-rule\n  rule: 共用規則\n");
+
+  assert.equal(rulesPath(dir, "shared/andestar.yaml"), external);
+  assert.equal(rulesPath(dir, external), external);
+  assert.deepEqual(loadRules(dir, "shared/andestar.yaml").rules.map((r) => r.id), ["shared-rule"]);
+});
+
 test("prompt 帶行號、規則與 header", () => {
   const ctx = {
     filePath: "/proj/src/uart.c",
@@ -378,4 +395,101 @@ test("組語的 prompt 用 asm 圍籬與對應的措辭", () => {
   assert.match(msg, /1\| my_func:/);
   assert.match(msg, /附帶的 include 檔案/);
   assert.match(msg, /\.equ BASE/);
+});
+
+// ---------------------------------------------------------------- 兩階段
+
+test("diff 解析：取出新檔案側的改動行號範圍", () => {
+  const diff = [
+    "diff --git a/x.c b/x.c",
+    "--- a/x.c",
+    "+++ b/x.c",
+    "@@ -10,0 +11,3 @@",
+    "@@ -30 +33 @@",
+  ].join("\n");
+  assert.deepEqual(parseDiffRanges(diff), [
+    { start: 11, end: 13 },
+    { start: 33, end: 33 },
+  ]);
+});
+
+test("diff 解析：純刪除也標記位置，刪掉一行同樣可能是 bug", () => {
+  assert.deepEqual(parseDiffRanges("@@ -10,3 +9,0 @@"), [{ start: 9, end: 9 }]);
+});
+
+test("diff 解析：相鄰範圍合併，清單才不會又長又碎", () => {
+  assert.deepEqual(mergeRanges([{ start: 1, end: 3 }, { start: 4, end: 5 }]), [
+    { start: 1, end: 5 },
+  ]);
+  assert.deepEqual(mergeRanges([{ start: 1, end: 2 }, { start: 9, end: 9 }]), [
+    { start: 1, end: 2 },
+    { start: 9, end: 9 },
+  ]);
+});
+
+test("階段一把落在改動範圍外的意見擋下來", () => {
+  const source = "rx_ready\nrx_ready\nrx_ready\nrx_ready\n";
+  const { kept, dropped } = filterFindings(
+    [finding({ line: 2, message: "在範圍內" }), finding({ line: 4, message: "在範圍外" })],
+    source,
+    () => false,
+    [{ start: 1, end: 2 }],
+  );
+  assert.deepEqual(kept.map((f) => f.message), ["在範圍內"]);
+  assert.equal(dropped[0].reason, "outside-changed-lines");
+});
+
+test("兩階段的重複意見只會出現一次", () => {
+  const source = "static uint32_t rx_ready;\nstatic uint32_t pending;\n";
+  const stage1 = [finding({ line: 1, rule_id: "volatile-shared-state", message: "階段一的措辭" })];
+  const stage2 = [
+    // 同一則問題，但措辭不同 —— 這正是 muteKey 比不出來的情況。
+    finding({ line: 1, rule_id: "volatile-shared-state", message: "階段二換句話說" }),
+    finding({ line: 2, rule_id: "volatile-shared-state", message: "另一個變數" }),
+  ];
+  const { merged, duplicates } = mergeStageFindings(stage1, stage2, source);
+  assert.equal(duplicates, 1);
+  assert.deepEqual(merged.map((f) => f.message), ["階段一的措辭", "另一個變數"]);
+});
+
+test("相鄰兩行命中同一條規則，不可以被誤併成一則", () => {
+  // 這份專案的 uart_dma.c 就是這個情況：rx_ready 與 pending_events
+  // 相鄰宣告、同一條規則、兩個都是真的問題。
+  const source = "static uint32_t rx_ready;\nstatic uint32_t pending_events;\n";
+  const { merged, duplicates } = mergeStageFindings(
+    [finding({ line: 1, rule_id: "volatile-shared-state", message: "rx_ready" })],
+    [finding({ line: 2, rule_id: "volatile-shared-state", message: "pending_events" })],
+    source,
+  );
+  assert.equal(duplicates, 0);
+  assert.equal(merged.length, 2);
+});
+
+test("意見過多時收合低嚴重度的，但 error 永遠不收", () => {
+  const many = [
+    finding({ line: 1, severity: "error", message: "e1" }),
+    finding({ line: 2, severity: "error", message: "e2" }),
+    finding({ line: 3, severity: "warning", message: "w1" }),
+    finding({ line: 4, severity: "warning", message: "w2" }),
+    finding({ line: 5, severity: "info", message: "i1" }),
+  ];
+  const { shown, collapsed } = applySeverityBudget(many, 3);
+  assert.deepEqual(shown.map((f) => f.message), ["e1", "e2", "w1"]);
+  assert.deepEqual(collapsed.map((f) => f.message), ["w2", "i1"]);
+});
+
+test("error 數量本身就超過額度時，全部照顯示", () => {
+  const errors = [1, 2, 3, 4].map((n) =>
+    finding({ line: n, severity: "error", message: `e${n}` }),
+  );
+  const { shown, collapsed } = applySeverityBudget(errors, 2);
+  assert.equal(shown.length, 4, "收起一則 error 等於幫使用者決定那則可以不看");
+  assert.equal(collapsed.length, 0);
+});
+
+test("沒有超過額度就原樣顯示，不為了精簡而藏東西", () => {
+  const few = [finding({ severity: "warning" }), finding({ severity: "info" })];
+  const { shown, collapsed } = applySeverityBudget(few, 8);
+  assert.equal(shown.length, 2);
+  assert.equal(collapsed.length, 0);
 });

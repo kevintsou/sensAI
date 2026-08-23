@@ -5,6 +5,26 @@
   "version": "0.1.0",
   "publisher": "sensai",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#102A43",
+    "theme": "dark"
+  },
+  "keywords": [
+    "firmware",
+    "embedded",
+    "code review",
+    "ARM",
+    "RISC-V",
+    "Andes",
+    "AI",
+    "assembly"
+  ],
+  "homepage": "https://github.com/kevintsou/sensAI",
+  "bugs": {
+    "url": "https://github.com/kevintsou/sensAI/issues"
+  },
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -89,6 +109,12 @@
           "default": "claude-opus-5",
           "description": "送給 CCR 的 model 欄位，實際上是路由 key。"
         },
+        "sensai.rulesPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "規則檔路徑。留空時使用工作區的 .sensai/rules.yaml；相對路徑以工作區根目錄為準。"
+        },
         "sensai.includeDepth": {
           "type": "number",
           "default": 2,
@@ -103,6 +129,11 @@
           "type": "number",
           "default": 120000,
           "description": "單次審查的逾時毫秒數。"
+        },
+        "sensai.maxFindings": {
+          "type": "number",
+          "default": 8,
+          "description": "面板上最多直接顯示幾則意見。超過的話，較低嚴重度的會收合到「另有 N 則」裡（error 永遠不收）。設 0 表示不限制。"
         }
       }
     }

@@ -226,6 +226,7 @@ code --install-extension sensai.vsix
 | 設定 | 放哪 | 為什麼 |
 |---|---|---|
 | `sensai.endpoint`、`sensai.model` | 使用者設定 | 每台機器的 CCR 裝法與路由偏好不同 |
+| `sensai.rulesPath` | 工作區設定 | 共用規則庫的位置；留空時使用 `.sensai/rules.yaml` |
 | `sensai.enabled` | 使用者或工作區皆可 | |
 | `privacy.*`、`assembly.arch` | `.sensai/config.yaml` | 團隊共同的決定，要進版控 |
 
@@ -248,6 +249,7 @@ code --install-extension sensai.vsix
 | `sensai.enabled` | `true` | 存檔時自動審查 |
 | `sensai.endpoint` | `http://127.0.0.1:3456` | CCR 位址 |
 | `sensai.model` | `claude-opus-5` | 送給 CCR 的 model 欄位，實際上是路由 key |
+| `sensai.rulesPath` | 空白 | 規則檔；可填絕對路徑，或相對於工作區根目錄的路徑 |
 | `sensai.includeDepth` | `2` | `#include "..."` 的遞迴深度 |
 | `sensai.contextBudgetBytes` | `120000` | 附帶 header 的總位元組上限 |
 | `sensai.requestTimeoutMs` | `120000` | 單次審查逾時 |
@@ -275,6 +277,20 @@ assembly:
 
 `.sensai/rules.yaml`，**由開發者透過版本控管維護**。使用者不修改規則，
 只能在自己機器上靜音（`.sensai/local-mutes.json`，已 gitignore）。
+
+### 集中管理規則
+
+若規則放在部門共用的私有 repository，可在目標專案的 `.vscode/settings.json`
+設定 `sensai.rulesPath`。設定可以是絕對路徑，也可以是相對於工作區根目錄的路徑：
+
+```json
+{
+  "sensai.rulesPath": "../firmware-review-rules/andestar-v5.yaml"
+}
+```
+
+此設定只改變規則來源；`.sensai/config.yaml` 仍留在目標專案，以便各專案獨立控管
+`privacy.never_send` 與稽核日誌。修改外部規則檔會自動重新載入。
 
 ```yaml
 - id: w1c-status-bits

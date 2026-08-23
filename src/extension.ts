@@ -4,7 +4,8 @@ import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext } from "./context";
-import { filterFindings } from "./filter";
+import { changedRanges, describeRanges, gitCwd } from "./diff";
+import { applySeverityBudget, filterFindings, mergeStageFindings } from "./filter";
 import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
 import { FindingsPanel } from "./panel";
@@ -12,15 +13,17 @@ import { appendAudit, blockedPaths } from "./privacy";
 import { EndpointUnavailableError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
 import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
-import { Finding, ReviewContext, Rule } from "./types";
+import { DroppedFinding, Finding, ReviewContext, Rule } from "./types";
 
 interface Settings {
   enabled: boolean;
   endpoint: string;
   model: string;
+  rulesPath: string;
   includeDepth: number;
   contextBudgetBytes: number;
   requestTimeoutMs: number;
+  maxFindings: number;
 }
 
 function readSettings(): Settings {
@@ -29,9 +32,11 @@ function readSettings(): Settings {
     enabled: c.get("enabled", true),
     endpoint: c.get("endpoint", "http://127.0.0.1:3456"),
     model: c.get("model", "claude-opus-5"),
+    rulesPath: c.get("rulesPath", ""),
     includeDepth: c.get("includeDepth", 2),
     contextBudgetBytes: c.get("contextBudgetBytes", 120000),
     requestTimeoutMs: c.get("requestTimeoutMs", 120000),
+    maxFindings: c.get("maxFindings", 8),
   };
 }
 
@@ -65,13 +70,16 @@ class Controller {
     } catch (err) {
       void vscode.window.showWarningMessage((err as Error).message);
     }
-    const { rules, problems } = loadRules(root);
+    const settings = readSettings();
+    const file = rulesPath(root, settings.rulesPath);
+    const { rules, problems } = loadRules(root, settings.rulesPath);
     this.rules = rules;
     this.mutes = new MuteStore(MuteStore.defaultPath(root));
 
     for (const p of problems) {
       this.output.appendLine(`[rules] ${p}`);
     }
+    this.output.appendLine(`[rules] 規則檔：${file}（載入 ${rules.length} 條）`);
     if (notify) {
       const summary = `sensAI：載入 ${rules.length} 條規則` +
         (problems.length > 0 ? `，${problems.length} 個問題（見 Output）` : "");
@@ -114,7 +122,7 @@ class Controller {
     if (syntaxOnly) {
       this.output.appendLine(
         `[review] 沒有適用於${LANGUAGE_LABEL[language]}的規則，本次只檢查語法。` +
-          `執行「sensAI: Initialize Project」建立 .sensai/rules.yaml。`,
+          "請確認 sensai.rulesPath 或 .sensai/rules.yaml。",
       );
     }
 
@@ -130,6 +138,10 @@ class Controller {
       return;
     }
 
+    // 相對 git HEAD 的改動行號。null 代表檔案未追蹤或不在 git repo —— 那種
+    // 情況下階段一與階段二的範圍會完全相同，跑兩次只是浪費，退回單階段。
+    const changed = await changedRanges(filePath, gitCwd(filePath));
+
     this.inFlight.add(filePath);
     this.panel.setState({
       kind: "reviewing",
@@ -140,37 +152,110 @@ class Controller {
     this.setStatus("$(sync~spin) sensAI", syntaxOnly ? "只檢查語法（沒有規則）" : "審查中");
 
     const started = Date.now();
-    try {
-      const raw = await requestReview(ctx, rules, {
-        endpoint: settings.endpoint,
-        model: settings.model,
-        timeoutMs: settings.requestTimeoutMs,
-        archId: this.config.assemblyArch,
-      });
-      const durationMs = Date.now() - started;
-
-      const lines = source.split("\n");
-      const { kept, dropped } = filterFindings(raw, source, (f) =>
-        this.mutes?.has(muteKey(f, lines[f.line - 1] ?? "")) ?? false,
-      );
-
+    const lines = source.split("\n");
+    const isMuted = (f: Finding) =>
+      this.mutes?.has(muteKey(f, lines[f.line - 1] ?? "")) ?? false;
+    const clientOpts = {
+      endpoint: settings.endpoint,
+      model: settings.model,
+      timeoutMs: settings.requestTimeoutMs,
+      archId: this.config.assemblyArch,
+    };
+    const logDropped = (dropped: DroppedFinding[]) => {
       for (const d of dropped) {
         this.output.appendLine(
           `[filter] 濾除 (${d.reason}) 第 ${d.finding.line} 行：${d.finding.message}`,
         );
       }
-
+    };
+    const publish = (
+      findings: Finding[],
+      dropped: DroppedFinding[],
+      stage: "changed" | "full" | undefined,
+    ) => {
+      const { shown, collapsed } = applySeverityBudget(findings, settings.maxFindings);
+      if (collapsed.length > 0) {
+        this.output.appendLine(
+          `[budget] 意見過多，收合 ${collapsed.length} 則較低嚴重度的意見` +
+            `（上限 ${settings.maxFindings}，可用 sensai.maxFindings 調整）`,
+        );
+      }
       this.panel.setState({
         kind: "result",
         result: {
           filePath,
-          findings: kept,
+          findings: shown,
+          collapsed,
           dropped,
-          durationMs,
+          durationMs: Date.now() - started,
           headersIncluded: ctx.headers.map((h) => h.path),
           contextTruncated: ctx.truncated,
+          stage,
         },
       });
+      return shown.length + collapsed.length;
+    };
+
+    try {
+      let kept: Finding[];
+      let dropped: DroppedFinding[];
+
+      if (changed && changed.length > 0) {
+        // 兩階段並行：階段一只看剛改的行，會先回來；階段二審整份檔案。
+        // 並行而不是依序，總等待時間才不會是兩者相加。
+        this.output.appendLine(
+          `[review] 兩階段：階段一只看第 ${describeRanges(changed)} 行，階段二審整份檔案`,
+        );
+        const stage1 = requestReview(ctx, rules, { ...clientOpts, changed });
+        const stage2 = requestReview(ctx, rules, clientOpts);
+
+        // 階段一先到就先顯示，不等階段二。
+        const first = stage1.then((raw) => {
+          const r = filterFindings(raw, source, isMuted, changed);
+          logDropped(r.dropped);
+          return r;
+        });
+        first
+          .then((r) => {
+            publish(r.kept, r.dropped, "changed");
+            this.setStatus("$(sync~spin) sensAI", `改動處 ${r.kept.length} 則 · 完整審查中`);
+          })
+          .catch(() => {
+            /* 階段一失敗不影響階段二，錯誤由下面的 await 統一處理 */
+          });
+
+        const [r1, r2] = await Promise.allSettled([first, stage2]);
+        if (r1.status === "rejected" && r2.status === "rejected") {
+          throw r1.reason;
+        }
+
+        const changedResult =
+          r1.status === "fulfilled" ? r1.value : { kept: [] as Finding[], dropped: [] };
+        if (r2.status === "rejected") {
+          // 完整審查掛了，至少把階段一的結果留在畫面上。
+          this.output.appendLine(`[review] 階段二失敗：${(r2.reason as Error).message}`);
+          kept = changedResult.kept;
+          dropped = changedResult.dropped;
+        } else {
+          const full = filterFindings(r2.value, source, isMuted);
+          logDropped(full.dropped);
+          const { merged, duplicates } = mergeStageFindings(changedResult.kept, full.kept, source);
+          if (duplicates > 0) {
+            this.output.appendLine(`[review] 兩階段重複 ${duplicates} 則，已合併`);
+          }
+          kept = merged;
+          dropped = [...changedResult.dropped, ...full.dropped];
+        }
+      } else {
+        const raw = await requestReview(ctx, rules, clientOpts);
+        const r = filterFindings(raw, source, isMuted);
+        logDropped(r.dropped);
+        kept = r.kept;
+        dropped = r.dropped;
+      }
+
+      const durationMs = Date.now() - started;
+      publish(kept, dropped, changed && changed.length > 0 ? "full" : undefined);
 
       appendAudit(root, this.config, {
         ts: new Date().toISOString(),
@@ -256,11 +341,14 @@ class Controller {
       return;
     }
     const dir = path.join(root, ".sensai");
+    const usesConfiguredRulesPath = rulesPath(root, readSettings().rulesPath) !== rulesPath(root);
     const files: Array<[string, string]> = [
-      ["rules.yaml", RULES_TEMPLATE],
       ["config.yaml", CONFIG_TEMPLATE],
       [".gitignore", GITIGNORE_TEMPLATE],
     ];
+    if (!usesConfiguredRulesPath) {
+      files.unshift(["rules.yaml", RULES_TEMPLATE]);
+    }
 
     const existing = files.filter(([name]) => fs.existsSync(path.join(dir, name)));
     if (existing.length > 0) {
@@ -293,10 +381,14 @@ class Controller {
     }
     this.reloadProjectFiles(true);
 
-    const doc = await vscode.workspace.openTextDocument(path.join(dir, "rules.yaml"));
-    await vscode.window.showTextDocument(doc);
+    if (!usesConfiguredRulesPath) {
+      const doc = await vscode.workspace.openTextDocument(path.join(dir, "rules.yaml"));
+      await vscode.window.showTextDocument(doc);
+    }
     void vscode.window.showInformationMessage(
-      "sensAI：已建立 .sensai/。裡面的規則只是格式示範，請換成你們專案真正的規則。",
+      usesConfiguredRulesPath
+        ? "sensAI：已建立 .sensai/ 的專案設定；規則使用 sensai.rulesPath 指定的位置。"
+        : "sensAI：已建立 .sensai/。裡面的規則只是格式示範，請換成你們專案真正的規則。",
     );
   }
 
@@ -377,18 +469,41 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
-  // 規則檔改動就熱重載，不用重開視窗。
+  // 專案設定與目前設定的規則檔改動都熱重載，不用重開視窗。
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (root) {
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(root, ".sensai/*.{yaml,yml}"),
+    const configWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(root, ".sensai/config.{yaml,yml}"),
     );
     const reload = () => controller.reloadProjectFiles();
-    watcher.onDidChange(reload);
-    watcher.onDidCreate(reload);
-    watcher.onDidDelete(reload);
-    context.subscriptions.push(watcher);
-    output.appendLine(`[init] 規則檔：${rulesPath(root)}`);
+    configWatcher.onDidChange(reload);
+    configWatcher.onDidCreate(reload);
+    configWatcher.onDidDelete(reload);
+
+    let rulesWatcher: vscode.FileSystemWatcher | undefined;
+    const watchRulesFile = () => {
+      rulesWatcher?.dispose();
+      const file = rulesPath(root, readSettings().rulesPath);
+      rulesWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(path.dirname(file), path.basename(file)),
+      );
+      rulesWatcher.onDidChange(reload);
+      rulesWatcher.onDidCreate(reload);
+      rulesWatcher.onDidDelete(reload);
+      output.appendLine(`[init] 規則檔：${file}`);
+    };
+    watchRulesFile();
+
+    context.subscriptions.push(
+      configWatcher,
+      { dispose: () => rulesWatcher?.dispose() },
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("sensai.rulesPath")) {
+          watchRulesFile();
+          controller.reloadProjectFiles(true);
+        }
+      }),
+    );
   }
 }
 

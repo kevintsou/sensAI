@@ -16,7 +16,8 @@ import * as path from "node:path";
 
 import { loadProjectConfig } from "../out/config.js";
 import { buildContext } from "../out/context.js";
-import { filterFindings } from "../out/filter.js";
+import { filterFindings, mergeStageFindings } from "../out/filter.js";
+import { changedRanges, describeRanges, gitCwd } from "../out/diff.js";
 import { detectLanguage, LANGUAGE_LABEL } from "../out/language.js";
 import { blockedPaths } from "../out/privacy.js";
 import { requestReview, EndpointUnavailableError } from "../out/review.js";
@@ -51,6 +52,7 @@ function parseArgs(argv) {
     else if (a === "--root") opts.root = argv[++i];
     else if (a === "--json") opts.json = true;
     else if (a === "--show-prompt") opts.showPrompt = true;
+    else if (a === "--staged") opts.staged = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else if (!a.startsWith("-")) opts.file = a;
   }
@@ -154,15 +156,58 @@ async function main() {
     );
   }
 
+  // --staged 走跟擴充相同的兩階段流程，才驗得到去重與範圍限制。
+  let changed = null;
+  if (opts.staged) {
+    changed = await changedRanges(filePath, gitCwd(filePath));
+    if (!changed || changed.length === 0) {
+      console.error(
+        C.yellow(
+          changed === null
+            ? "檔案未被 git 追蹤，無法算改動範圍 —— 退回單階段。"
+            : "相對 HEAD 沒有改動 —— 退回單階段。",
+        ),
+      );
+      changed = null;
+    } else {
+      console.error(C.dim(`階段一只看第 ${describeRanges(changed)} 行`));
+    }
+  }
+
   const started = Date.now();
   let raw;
+  let stagedSummary = null;
   try {
-    raw = await requestReview(ctx, rules, {
-      endpoint: opts.endpoint,
-      model: opts.model,
-      timeoutMs: 180000,
-      archId: opts.arch ?? config.assemblyArch,
-    });
+    if (changed) {
+      const clientOpts = {
+        endpoint: opts.endpoint,
+        model: opts.model,
+        timeoutMs: 180000,
+        archId: opts.arch ?? config.assemblyArch,
+      };
+      const [rawChanged, rawFull] = await Promise.all([
+        requestReview(ctx, rules, { ...clientOpts, changed }),
+        requestReview(ctx, rules, clientOpts),
+      ]);
+      const one = filterFindings(rawChanged, source, () => false, changed);
+      const two = filterFindings(rawFull, source, () => false);
+      const { merged, duplicates } = mergeStageFindings(one.kept, two.kept, source);
+      stagedSummary = {
+        stage1: one.kept.length,
+        stage2: two.kept.length,
+        duplicates,
+        merged: merged.length,
+        outOfScope: one.dropped.filter((d) => d.reason === "outside-changed-lines").length,
+      };
+      raw = merged;
+    } else {
+      raw = await requestReview(ctx, rules, {
+        endpoint: opts.endpoint,
+        model: opts.model,
+        timeoutMs: 180000,
+        archId: opts.arch ?? config.assemblyArch,
+      });
+    }
   } catch (err) {
     if (err instanceof EndpointUnavailableError) {
       console.error(C.red(err.message));
@@ -174,7 +219,9 @@ async function main() {
   }
   const durationMs = Date.now() - started;
 
-  const { kept, dropped } = filterFindings(raw, source, () => false);
+  const { kept, dropped } = stagedSummary
+    ? { kept: raw, dropped: [] }
+    : filterFindings(raw, source, () => false);
 
   if (opts.json) {
     process.stdout.write(
@@ -193,6 +240,21 @@ async function main() {
     console.log(`  ${C.dim("觸發條件")}  ${f.trigger_condition}`);
     console.log(`  ${C.dim("後果")}      ${f.consequence}`);
     console.log(`  ${C.dim("依據")}      ${f.evidence}`);
+  }
+
+  if (stagedSummary) {
+    console.log(
+      C.dim(
+        `\n--- 兩階段 ---\n` +
+          `  階段一（改動處）${stagedSummary.stage1} 則` +
+          (stagedSummary.outOfScope > 0
+            ? `（另有 ${stagedSummary.outOfScope} 則超出改動範圍被擋下）`
+            : "") +
+          `\n  階段二（整份）  ${stagedSummary.stage2} 則\n` +
+          `  重複            ${stagedSummary.duplicates} 則，已合併\n` +
+          `  合併後          ${stagedSummary.merged} 則`,
+      ),
+    );
   }
 
   if (dropped.length > 0) {

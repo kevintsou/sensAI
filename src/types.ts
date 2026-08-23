@@ -32,7 +32,7 @@ export interface Finding {
 
 export interface DroppedFinding {
   finding: Finding;
-  reason: "evidence-not-found" | "line-out-of-range" | "muted";
+  reason: "evidence-not-found" | "line-out-of-range" | "muted" | "outside-changed-lines";
 }
 
 export interface ReviewResult {
@@ -42,6 +42,13 @@ export interface ReviewResult {
   durationMs: number;
   headersIncluded: string[];
   contextTruncated: boolean;
+  /**
+   * "changed" 是階段一（只看剛改動的行）的先期結果，之後還會被階段二補上；
+   * "full" 是完整結果。省略代表沒有分階段。
+   */
+  stage?: "changed" | "full";
+  /** 因為意見過多而被收起來的低嚴重度意見。內容完整，只是預設不展開。 */
+  collapsed?: Finding[];
 }
 
 export interface HeaderFile {

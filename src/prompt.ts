@@ -1,4 +1,5 @@
 import { ArchFacts } from "./abi";
+import { LineRange, describeRanges } from "./diff";
 import { SourceLanguage } from "./language";
 import { Rule, ReviewContext, SYNTAX_RULE_ID } from "./types";
 
@@ -122,9 +123,26 @@ function numbered(source: string): string {
   return lines.map((l, i) => `${String(i + 1).padStart(width)}| ${l}`).join("\n");
 }
 
-export function buildUserMessage(ctx: ReviewContext, rules: Rule[]): string {
+export function buildUserMessage(
+  ctx: ReviewContext,
+  rules: Rule[],
+  changed: LineRange[] | null = null,
+): string {
   const fence = ctx.language === "asm" ? "asm" : "c";
   const sections: string[] = [];
+
+  // 放第一段而不是夾在規則後面 —— 範圍限制埋在中間很容易被忽略。
+  if (changed && changed.length > 0) {
+    sections.push(
+      "## 本次只看這幾行\n\n" +
+        `作者剛剛改動的是第 ${describeRanges(changed)} 行。` +
+        "**只回報問題本身落在這些行上的意見**，其他行有問題也先不要提 —— " +
+        "那些會由另一次完整審查負責。\n\n" +
+        "整份檔案還是附在下面，因為判斷這幾行對不對需要看得懂上下文" +
+        "（例如某個暫存器的宣告在別的地方）。附上全文是為了讓你有依據，" +
+        "不是要你審查全文。",
+    );
+  }
 
   if (rules.length > 0) {
     sections.push(

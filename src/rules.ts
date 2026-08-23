@@ -12,21 +12,24 @@ export interface RulesLoadResult {
 const SEVERITIES: Severity[] = ["error", "warning", "info"];
 const LANGUAGES: SourceLanguage[] = ["c", "asm"];
 
-export function rulesPath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".sensai", "rules.yaml");
+export function rulesPath(workspaceRoot: string, configuredPath = ""): string {
+  const custom = configuredPath.trim();
+  return custom === ""
+    ? path.join(workspaceRoot, ".sensai", "rules.yaml")
+    : path.resolve(workspaceRoot, custom);
 }
 
 /**
- * 載入 `.sensai/rules.yaml`。
+ * 載入規則檔。未設定自訂路徑時使用 `.sensai/rules.yaml`。
  *
  * 規則寫壞不應該讓整個擴充停擺，所以個別規則的問題收集到 `problems`
  * 回報給使用者，其餘規則照常載入。
  */
-export function loadRules(workspaceRoot: string): RulesLoadResult {
-  const file = rulesPath(workspaceRoot);
+export function loadRules(workspaceRoot: string, configuredPath = ""): RulesLoadResult {
+  const file = rulesPath(workspaceRoot, configuredPath);
   const problems: string[] = [];
   if (!fs.existsSync(file)) {
-    return { rules: [], problems: ["找不到 .sensai/rules.yaml —— 沒有規則的話審查結果會很泛泛。"] };
+    return { rules: [], problems: [`找不到規則檔：${file}`] };
   }
 
   let doc: unknown;

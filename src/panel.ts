@@ -59,7 +59,12 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 
   setState(state: PanelState): void {
     this.state = state;
-    this.findings = state.kind === "result" ? state.result.findings : [];
+    // 收合的意見也要能按「這是誤報」，索引接在顯示的那些後面 —— 順序必須
+    // 跟 resultHtml 的 render 呼叫一致。
+    this.findings =
+      state.kind === "result"
+        ? [...state.result.findings, ...(state.result.collapsed ?? [])]
+        : [];
     this.render();
   }
 
@@ -93,6 +98,12 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   }
 
   private resultHtml(result: ReviewResult): string {
+    const collapsed = result.collapsed ?? [];
+    const stageNote =
+      result.stage === "changed"
+        ? `<div class="stage">只看剛改動的行 · 完整審查進行中…</div>`
+        : "";
+
     const head = `<div class="meta">
       <div>${escapeHtml(result.filePath.split(/[\\/]/).pop() ?? result.filePath)}</div>
       <div class="muted">${result.findings.length} 則意見 ·
@@ -100,14 +111,13 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         ${(result.durationMs / 1000).toFixed(1)}s${
           result.dropped.length > 0 ? ` · 濾除 ${result.dropped.length} 則` : ""
         }${result.contextTruncated ? " · 上下文已截斷" : ""}</div>
-    </div>`;
+    </div>${stageNote}`;
 
-    if (result.findings.length === 0) {
+    if (result.findings.length === 0 && collapsed.length === 0) {
       return head + `<p class="ok">沒有發現問題。</p>`;
     }
 
-    const items = result.findings
-      .map((f, i) => {
+    const render = (f: Finding, i: number) => {
         const rule = f.rule_id
           ? `<span class="rule">${escapeHtml(f.rule_id)}</span>`
           : "";
@@ -125,10 +135,27 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
           </dl>
           <button class="mute" data-index="${i}">這是誤報</button>
         </div>`;
-      })
-      .join("");
+    };
 
-    return head + items;
+    const items = result.findings.map((f, i) => render(f, i)).join("");
+
+    if (collapsed.length === 0) {
+      return head + items;
+    }
+
+    // 收合的部分用 <details>，預設關著但一鍵可展開 —— 意見還在，
+    // 只是不跟重要的那些搶注意力。藏到看不到就變成另一種問題了。
+    const hidden = collapsed
+      .map((f, i) => render(f, result.findings.length + i))
+      .join("");
+    return (
+      head +
+      items +
+      `<details class="collapsed">
+        <summary>另有 ${collapsed.length} 則較低嚴重度的意見（意見過多，已收合）</summary>
+        ${hidden}
+      </details>`
+    );
   }
 
   private html(): string {
