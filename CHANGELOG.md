@@ -2,6 +2,19 @@
 
 All notable changes to sensAI are documented in this file.
 
+## 0.2.2 — 2026-08-23
+
+### Changed
+
+- Reworked the Marketplace README into a concise bilingual user guide.
+- Moved rule authoring, privacy configuration, and development workflow into dedicated documents.
+
+## 0.2.1 — 2026-08-23
+
+### Changed
+
+- Added an English overview, setup guide, and privacy summary to the Marketplace listing.
+
 ## 0.2.0 — 2026-08-23
 
 ### Added
