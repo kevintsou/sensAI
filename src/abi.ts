@@ -32,7 +32,10 @@ const RISCV_ANDES_V5: ArchFacts = {
 - MMIO 存取之間若有順序需求，需要 fence iorw, iorw；純粹的資料相依不保證順序
 - Andes 專有擴充（CoDense 的 exec.it、專有 CSR）只在對應的 -march 下合法
 
-葉子函式（不呼叫任何其他函式）不需要保存 ra。`,
+葉子函式（不呼叫任何其他函式）不需要保存 ra。
+
+程式進入點（_start、reset handler、中斷向量直接指向的處理常式）沒有呼叫端
+可以回去，callee-saved 的保存與還原規則不適用，不要對它們套用。`,
 };
 
 const ARMV7_M: ArchFacts = {
@@ -54,7 +57,10 @@ const ARMV7_M: ArchFacts = {
 - 寫入設定暫存器後若後續行為相依，需要 DSB；改動取指相關設定需要 ISB
 - 中斷向量表的對齊需符合 VTOR 的要求
 
-葉子函式（不呼叫任何其他函式）不需要保存 lr。`,
+葉子函式（不呼叫任何其他函式）不需要保存 lr。
+
+程式進入點（_start、reset handler、中斷向量直接指向的處理常式）沒有呼叫端
+可以回去，callee-saved 的保存與還原規則不適用，不要對它們套用。`,
 };
 
 const ARCHES = [RISCV_ANDES_V5, ARMV7_M];
