@@ -120,6 +120,63 @@
       delay_us(10);
       PLL->CTRL |= PLL_ENABLE;
 
+- id: unaligned-widening-cast
+  languages: [c]
+  severity: error
+  rule: |
+    把對齊保證較弱的指標轉型成較寬的型別再解參考，位址不保證符合新型別的
+    對齊要求。典型來源是 uint8_t* / char* / void* 的緩衝區 —— DMA buffer、
+    封包 payload、ring buffer、從外部傳進來的位址 —— 轉成 uint32_t* 或
+    uint16_t* 或結構指標之後直接讀寫。編譯器會「相信」轉型後的型別，
+    據此挑選指令，所以問題不會在編譯期被擋下來。
+
+    位址是編譯期常數的時候要特別注意，因為對齊可以直接算出來，不必臆測：
+    常數位址對型別大小取餘數不為零，就是確定的錯誤，不是「可能有問題」。
+    例如 *(uint32_t *)0x0003 —— 0x0003 % 4 = 3，這個存取一定不對齊。
+    這類寫法最常見的形式是暫存器位址的巨集，位移量打錯一個字就成立：
+
+        #define UART_STATUS (*(volatile uint32_t *)0x40001003)
+
+    回報這種案例時把餘數算出來寫進 evidence，不要用「可能未對齊」帶過 ——
+    講得出確定的算式，作者才不會把它當成又一則模稜兩可的建議。
+
+    本專案的兩個目標架構表現不同，但都不安全：
+
+    AndeStar V5（RISC-V）未對齊的 load/store 可能直接觸發 misaligned
+    exception；就算平台裝了 trap handler 去模擬，一次存取也要數十到數百個
+    週期，落在 ISR 裡會直接毀掉中斷延遲。
+
+    ARMv7E-M 對 Normal memory 的單筆 LDR/STR 多半能完成，所以「在 ARM 上
+    測起來沒事」不能當作沒問題的證據 —— LDM/STM/LDRD/STRD 與 exclusive
+    存取不論如何都會 fault，而編譯器有可能把結構複製或連續存取合併成
+    這些指令。CCR.UNALIGN_TRP 打開時連單筆存取也會 fault。
+
+    對 MMIO 位址則兩個架構都一樣：未對齊存取一律不合法。
+
+    正解是用 memcpy 搬進一個正確型別的區域變數（編譯器在對齊已知時會把它
+    優化掉），或逐位元組組合，不要靠轉型。
+  except: |
+    直接宣告的變數、陣列與結構成員由編譯器保證對齊，一般的存取不算問題，
+    不要報。
+    逐位元組（uint8_t / char）的存取沒有對齊需求，不算問題。
+    已經用 memcpy、逐位元組組合，或編譯器的 packed 屬性處理的寫法就是正解，
+    不要報。
+    轉型前已經檢查或斷言過對齊（例如 ((uintptr_t)p & 3) == 0）的，不算問題。
+  examples:
+    bad: |
+      /* payload 指向 DMA 收到的位元組流，只保證 1-byte 對齊 */
+      uint32_t read_seq(const uint8_t *payload)
+      {
+          return *(const uint32_t *)(payload + 3);
+      }
+    good: |
+      uint32_t read_seq(const uint8_t *payload)
+      {
+          uint32_t seq;
+          memcpy(&seq, payload + 3, sizeof seq);
+          return seq;
+      }
+
 # ---------------------------------------------------------- 組合語言
 
 - id: asm-callee-saved
