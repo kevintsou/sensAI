@@ -16,6 +16,12 @@ export interface ReviewClientOptions {
    */
   changed?: LineRange[] | null;
   /**
+   * 模型回報了不存在的規則 id 時呼叫。該則意見的 rule_id 已經被歸為 null，
+   * 這裡只是讓上層有機會記錄下來 —— 頻繁出現通常代表規則寫得不夠具體，
+   * 模型在猜。
+   */
+  onUnknownRuleId?: (id: string) => void;
+  /**
    * CCR 不驗證，所以預設是佔位字串。
    * 想略過 CCR 直接打 Anthropic API 時，設 ANTHROPIC_API_KEY 並把
    * endpoint 指向 https://api.anthropic.com。
@@ -109,7 +115,38 @@ function isConnectionProblem(err: unknown): boolean {
 
 const SEVERITIES: Severity[] = ["error", "warning", "info"];
 
-function coerceFinding(raw: unknown): Finding | null {
+/**
+ * 模型會照著看到的命名慣例編出不存在的 rule_id。
+ *
+ * 實測：把所有 asm-* 規則從 rules.yaml 拿掉之後，prompt 裡完全沒有那些
+ * 字串，模型照樣回報 asm-stack-alignment、asm-callee-saved —— 編得跟真的
+ * 一模一樣，肉眼分不出來。
+ *
+ * 放著不管的後果是面板顯示一個 rules.yaml 裡找不到的規則，而且 muteKey
+ * 把 rule_id 算進去，靜音會綁在幽靈 id 上，模型下次換個編法就失效。
+ *
+ * 對不上就歸 null（顯示成「無規則」）。不丟掉整則意見 —— 錯的是歸屬，
+ * 問題本身可能是真的。
+ */
+export function normalizeRuleId(
+  raw: unknown,
+  validIds: ReadonlySet<string>,
+): { ruleId: string | null; fabricated: string | null } {
+  if (typeof raw !== "string" || raw === "") {
+    return { ruleId: null, fabricated: null };
+  }
+  // syntax-error 是合法的，但它不來自 rules.yaml。
+  if (raw === SYNTAX_RULE_ID || validIds.has(raw)) {
+    return { ruleId: raw, fabricated: null };
+  }
+  return { ruleId: null, fabricated: raw };
+}
+
+function coerceFinding(
+  raw: unknown,
+  validIds: ReadonlySet<string>,
+  onFabricated: (id: string) => void,
+): Finding | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
   }
@@ -123,6 +160,10 @@ function coerceFinding(raw: unknown): Finding | null {
   if (message === "") {
     return null;
   }
+  const { ruleId, fabricated } = normalizeRuleId(r.rule_id, validIds);
+  if (fabricated) {
+    onFabricated(fabricated);
+  }
   return {
     line,
     severity: SEVERITIES.includes(r.severity as Severity) ? (r.severity as Severity) : "warning",
@@ -130,7 +171,7 @@ function coerceFinding(raw: unknown): Finding | null {
     trigger_condition: str(r.trigger_condition),
     consequence: str(r.consequence),
     evidence: str(r.evidence),
-    rule_id: typeof r.rule_id === "string" && r.rule_id !== "" ? r.rule_id : null,
+    rule_id: ruleId,
   };
 }
 
@@ -189,7 +230,13 @@ export async function requestReview(
   if (!Array.isArray(input?.findings)) {
     return [];
   }
-  return input.findings
-    .map(coerceFinding)
+  const validIds = new Set(rules.map((r) => r.id));
+  const fabricated = new Set<string>();
+  const findings = input.findings
+    .map((f) => coerceFinding(f, validIds, (id) => fabricated.add(id)))
     .filter((f): f is Finding => f !== null);
+  for (const id of fabricated) {
+    opts.onUnknownRuleId?.(id);
+  }
+  return findings;
 }

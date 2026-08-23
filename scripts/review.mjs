@@ -174,6 +174,9 @@ async function main() {
     }
   }
 
+  const warnUnknownRuleId = (id) =>
+    console.error(C.yellow(`[rules] 模型回報了不存在的規則 id「${id}」，已改記為無規則`));
+
   const started = Date.now();
   let raw;
   let stagedSummary = null;
@@ -184,6 +187,7 @@ async function main() {
         model: opts.model,
         timeoutMs: 180000,
         archId: opts.arch ?? config.assemblyArch,
+        onUnknownRuleId: warnUnknownRuleId,
       };
       const [rawChanged, rawFull] = await Promise.all([
         requestReview(ctx, rules, { ...clientOpts, changed }),
@@ -206,6 +210,7 @@ async function main() {
         model: opts.model,
         timeoutMs: 180000,
         archId: opts.arch ?? config.assemblyArch,
+        onUnknownRuleId: warnUnknownRuleId,
       });
     }
   } catch (err) {

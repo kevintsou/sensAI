@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Rule ids reported by the model are now checked against the rules actually sent, and dropped to "no rule" when they do not match. The model invents ids that follow the naming convention of the rules it has seen: with every `asm-*` rule removed from the project, and none of those names anywhere in the prompt, it still attributed findings to `asm-stack-alignment` and `asm-callee-saved`. It does this only some of the time, which is what made silently trusting it dangerous -- a fabricated id points at a rule the reader cannot find, and mute keys built on one stop matching as soon as the model words it differently. The finding itself is kept; only the attribution is cleared, and the invented id goes to the output channel.
+
 ## 0.2.2 — 2026-08-23
 
 ### Changed

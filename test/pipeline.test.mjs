@@ -12,6 +12,7 @@ import {
   mergeStageFindings,
 } from "../out/filter.js";
 import { mergeRanges, parseDiffRanges } from "../out/diff.js";
+import { normalizeRuleId } from "../out/review.js";
 import { loadRules, rulesPath } from "../out/rules.js";
 import { buildUserMessage, systemPrompt } from "../out/prompt.js";
 import { detectLanguage } from "../out/language.js";
@@ -492,4 +493,40 @@ test("沒有超過額度就原樣顯示，不為了精簡而藏東西", () => {
   const { shown, collapsed } = applySeverityBudget(few, 8);
   assert.equal(shown.length, 2);
   assert.equal(collapsed.length, 0);
+});
+
+// ------------------------------------------------- rule_id 驗證
+
+test("模型編造的 rule_id 會被歸為無規則，而不是照單全收", () => {
+  // 實測過：把 asm-* 規則全部拿掉之後，prompt 裡沒有那些字串，
+  // 模型仍然照命名慣例吐出 asm-stack-alignment 這種 id。
+  const valid = new Set(["w1c-status-bits", "volatile-shared-state"]);
+  assert.deepEqual(normalizeRuleId("asm-stack-alignment", valid), {
+    ruleId: null,
+    fabricated: "asm-stack-alignment",
+  });
+});
+
+test("真實存在的 rule_id 原樣保留", () => {
+  const valid = new Set(["w1c-status-bits"]);
+  assert.deepEqual(normalizeRuleId("w1c-status-bits", valid), {
+    ruleId: "w1c-status-bits",
+    fabricated: null,
+  });
+});
+
+test("syntax-error 不在 rules.yaml 裡，但它是合法的", () => {
+  assert.deepEqual(normalizeRuleId("syntax-error", new Set()), {
+    ruleId: "syntax-error",
+    fabricated: null,
+  });
+});
+
+test("沒有 rule_id 的意見不算編造", () => {
+  for (const raw of [null, "", undefined, 42]) {
+    assert.deepEqual(normalizeRuleId(raw, new Set(["x"])), {
+      ruleId: null,
+      fabricated: null,
+    });
+  }
 });

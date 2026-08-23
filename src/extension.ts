@@ -160,6 +160,12 @@ class Controller {
       model: settings.model,
       timeoutMs: settings.requestTimeoutMs,
       archId: this.config.assemblyArch,
+      onUnknownRuleId: (id: string) => {
+        this.output.appendLine(
+          `[review] 模型回報了不存在的規則 id「${id}」，已改記為無規則。` +
+            "常出現的話，通常代表規則寫得不夠具體，模型在照命名慣例猜。",
+        );
+      },
     };
     const logDropped = (dropped: DroppedFinding[]) => {
       for (const d of dropped) {
