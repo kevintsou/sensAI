@@ -2,7 +2,7 @@
   "name": "sensai",
   "displayName": "sensAI",
   "description": "AI code review for ARM / Andes firmware C and assembly, on save",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "sensai",
   "license": "MIT",
   "icon": "media/icon.png",
