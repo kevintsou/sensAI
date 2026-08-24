@@ -8,15 +8,25 @@ All notable changes to sensAI are documented in this file.
 
 - Added a complete installation guide for Marketplace users, extension developers, and automation agents, including endpoint setup, privacy configuration, mock-router verification, troubleshooting, and CLI exit-code behaviour.
 
+## 0.3.0 — 2026-08-24
+
+### Added
+
+- Save-triggered reviews now wait for a quiet period (`sensai.debounceMs`, default 1000ms) before sending, so typing no longer fires a request on every autosave.
+- Saves that arrive while a review is running are coalesced into a single re-run on the latest content instead of being dropped or run concurrently, so the last save is always the one that gets reviewed.
+- During a burst of saves the re-runs do only stage one (changed lines); the full-file review is deferred and run once the saves settle, halving requests without permanently skipping out-of-range findings.
+- Results are marked stale when the file changed while the review was in flight, so shifted line numbers are flagged rather than silently shown.
+- `sensai.maxFindings` (default 8) caps how many findings the panel shows directly; lower severities collapse first and `error` never collapses.
+
 ### Changed
 
+- Saving a file with no changes relative to git HEAD no longer triggers a review; an on-demand review always runs regardless.
 - Dropped the six `asm-*` rules from the sample rule set. Every one of them restated a category the assembly prompt already names, and the architecture facts they leaned on are injected from `src/abi.ts` anyway. Removing them changed nothing measurable: the assembly example still yields all seven expected findings on the same lines with no decoys. The one piece of knowledge they held that lived nowhere else -- that a program entry point has no caller to return to, so callee-saved rules do not apply to it -- moved into `src/abi.ts`, where the project's own guidance says architecture facts belong.
-- Save-triggered reviews now wait for a short pause and thin out repeated saves during bursts, reducing redundant endpoint requests while ensuring the latest file contents are reviewed.
 
 ### Fixed
 
 - Rule ids reported by the model are now checked against the rules actually sent, and dropped to "no rule" when they do not match. The model invents ids that follow the naming convention of the rules it has seen: with every `asm-*` rule removed from the project, and none of those names anywhere in the prompt, it still attributed findings to `asm-stack-alignment` and `asm-callee-saved`. It does this only some of the time, which is what made silently trusting it dangerous -- a fabricated id points at a rule the reader cannot find, and mute keys built on one stop matching as soon as the model words it differently. The finding itself is kept; only the attribution is cleared, and the invented id goes to the output channel.
-- Save-triggered reviews no longer run when a save does not change file contents, and rapid consecutive saves no longer drop or double-start reviews.
+- Include-resolution tests now pass on Windows. Their fake filesystem keyed headers by POSIX paths, which `path.resolve()` never matches on Windows; the fixtures now normalize separators and strip the drive prefix. Production code is unchanged.
 
 ## 0.2.2 — 2026-08-23
 
