@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## 0.3.1 — 2026-08-24
+
+### Fixed
+
+- Burst-mode reviews no longer lose the findings on the lines you just touched. During a burst the catch-up review runs stage two alone and publishing replaces the panel wholesale, so everything stage one had found while the burst was degrading reviews vanished the moment the burst ended. The last burst round's findings are now kept with the source they were computed against and merged into the catch-up the same way the normal two-stage path merges; carried findings are dropped rather than mixed in if the file moved on before the catch-up ran.
+
 ## 0.2.3 — 2026-08-24
 
 ### Added
