@@ -2,11 +2,12 @@
 
 AI-assisted code review for ARM and Andes AndeStar V5 firmware in VS Code.
 
-[繁體中文](#繁體中文) · [Rule authoring](docs/rules.md) · [Privacy](docs/privacy.md) · [Contributing](CONTRIBUTING.md)
+[繁體中文](#繁體中文) · [Install guide](docs/INSTALL.md) · [Rule authoring](docs/rules.md) · [Privacy](docs/privacy.md) · [Contributing](CONTRIBUTING.md)
 
 ## English
 
-sensAI reviews firmware C and assembly files when you save them. It combines
+sensAI reviews firmware C and assembly files when you save them, provided the
+file has actual changes relative to git HEAD. It combines
 the file, relevant project headers, and rules written by your team, then shows
 grounded findings in the sensAI side panel. It is designed to catch
 project-specific issues that generic AI tools do not know about: DMA cache
@@ -16,6 +17,7 @@ similar hardware conventions.
 ### Highlights
 
 - Reviews `.c`, `.h`, `.s`, and `.S` files on save or on demand.
+- Skips a save with no changes; an on-demand review always runs.
 - Resolves project-local includes and injects ABI facts for assembly reviews.
 - Uses natural-language rules maintained in version control.
 - Requires source-grounded evidence and drops fabricated references.
@@ -70,12 +72,13 @@ enabling reviews on confidential firmware repositories.
 | `sensai.includeDepth` | `2` | Recursive project-header depth. |
 | `sensai.contextBudgetBytes` | `120000` | Header-context byte limit. |
 | `sensai.requestTimeoutMs` | `120000` | Per-review timeout in milliseconds. |
+| `sensai.maxFindings` | `8` | Finding cap; lower severities collapse first, `error` never collapses. |
 
 ## 繁體中文
 
 sensAI 是給 ARM 與 Andes AndeStar V5 韌體團隊使用的 VS Code AI code review
-擴充。存檔時，它會帶入目前檔案、專案內引用的 header 與團隊規則，將有依據的
-意見顯示在 sensAI 側欄。它特別適合檢查通用工具不知道的專案知識，例如 DMA cache、
+擴充。存檔且檔案相對 git HEAD 有改動時，它會帶入目前檔案、專案內引用的 header
+與團隊規則，將有依據的意見顯示在 sensAI 側欄。它特別適合檢查通用工具不知道的專案知識，例如 DMA cache、
 W1C 暫存器、ISR 安全性與組語 ABI。
 
 ### 快速開始
@@ -113,6 +116,17 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 | `sensAI: Export False Positive Report` | 匯出本機誤報記錄。 |
 | `sensAI: Clear Local Mutes` | 清除本機靜音。 |
 
+### 觸發時機
+
+存檔會觸發審查的條件是**存檔且該檔案相對 git HEAD 有改動**。沒有改動的存檔
+（改完又改回來、格式化沒動到東西、慣性按 Ctrl+S）不會送出任何內容，側欄維持
+原狀，Output 會留一行記錄。
+
+未追蹤的檔案或不在 git repo 裡的檔案無法判定改動範圍，這種情況**照樣審**整份
+檔案 —— 「無法判定」不等於「沒有改動」。
+
+`sensAI: Review Current File` 不受此限制，一律照審。
+
 ### 限制
 
 - 多根工作區目前只讀取第一個工作區資料夾。
@@ -121,6 +135,7 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 
 ## More documentation
 
+- [Installation guide](docs/INSTALL.md)
 - [Rule authoring](docs/rules.md)
 - [Privacy and project configuration](docs/privacy.md)
 - [Design rationale](SPEC.md)
