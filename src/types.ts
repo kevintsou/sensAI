@@ -43,6 +43,11 @@ export interface ReviewResult {
   headersIncluded: string[];
   contextTruncated: boolean;
   /**
+   * 這批結果產出的時間（epoch 毫秒）。面板顯示成 HH:MM:SS，讓使用者知道
+   * 目前看到的意見是什麼時候跑出來的 —— 尤其連續存檔、結果會被後續蓋過時。
+   */
+  completedAt?: number;
+  /**
    * "changed" 是階段一（只看剛改動的行）的先期結果，之後還會被階段二補上；
    * "changed-only" 也只看改動的行，但因為連續觸發而暫時不做完整審查 ——
    * 等安靜下來才會補；"full" 是完整結果。省略代表沒有分階段。

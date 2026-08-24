@@ -324,6 +324,7 @@ class Controller {
           collapsed,
           dropped,
           durationMs: Date.now() - started,
+          completedAt: Date.now(),
           headersIncluded: ctx.headers.map((h) => h.path),
           contextTruncated: ctx.truncated,
           stage,

@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Added
+
+- The panel meta line now shows the time a result was produced (HH:MM:SS), after the duration. When a result lingers on screen while a later review runs, or is left over from an earlier save, the timestamp says when it was actually computed.
+
 ## 0.4.1 — 2026-08-24
 
 ### Changed

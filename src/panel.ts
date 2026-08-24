@@ -35,6 +35,13 @@ function nonce(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/** epoch 毫秒格式化成本地時間的 HH:MM:SS（24 小時制，補零）。 */
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 const SEVERITY_LABEL: Record<Finding["severity"], string> = {
   error: "error",
   warning: "warning",
@@ -217,13 +224,17 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       ? `<div class="stale">審查期間檔案又被改過，行號是對著送出當下那一版算的，跳行可能會偏。</div>`
       : "";
 
+    // 產出時間顯示成 HH:MM:SS，讓使用者知道這批意見是什麼時候跑的。
+    const time =
+      result.completedAt !== undefined ? ` · ${formatTime(result.completedAt)}` : "";
+
     const head = `${updatingNote}<div class="meta">
       <div>${escapeHtml(result.filePath.split(/[\\/]/).pop() ?? result.filePath)}</div>
       <div class="muted">${result.findings.length} 則意見 ·
         附帶 ${result.headersIncluded.length} 個 header ·
         ${(result.durationMs / 1000).toFixed(1)}s${
           result.dropped.length > 0 ? ` · 濾除 ${result.dropped.length} 則` : ""
-        }${result.contextTruncated ? " · 上下文已截斷" : ""}</div>
+        }${result.contextTruncated ? " · 上下文已截斷" : ""}${time}</div>
     </div>${stageNote}${staleNote}`;
 
     if (result.findings.length === 0 && collapsed.length === 0) {
