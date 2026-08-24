@@ -24,15 +24,27 @@ import { muteKey } from "../out/mutes.js";
 
 const ROOT = "/proj";
 
+/**
+ * 把路徑正規化成 POSIX 分隔線，並去掉 Windows 的磁碟機代號前綴。
+ *
+ * fixture 的 key 一律寫成 POSIX 路徑（`/proj/src/regs.h`），但 context.ts 用
+ * path.resolve() 解析相對 include，在 Windows 上會產出 `D:\proj\src\regs.h`
+ * ——反斜線加磁碟機代號。兩邊都過這個函式，比對才不會因平台而異。
+ */
+function norm(p) {
+  return p.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "");
+}
+
 /** 用假的檔案系統跑 include 解析，測試才不會依賴真實磁碟佈局。 */
 function fakeFs(files, index = {}) {
+  const has = (p) => Object.hasOwn(files, norm(p));
   return {
-    exists: (p) => Object.hasOwn(files, p),
+    exists: (p) => has(p),
     read: (p) => {
-      if (!Object.hasOwn(files, p)) {
+      if (!has(p)) {
         throw new Error(`ENOENT ${p}`);
       }
-      return files[p];
+      return files[norm(p)];
     },
     headerIndex: () => new Map(Object.entries(index)),
   };
@@ -44,7 +56,7 @@ test("include 解析：相對於引用檔案所在目錄", () => {
   const fa = fakeFs({ "/proj/src/regs.h": "#define A 1" });
   const ctx = buildContext("/proj/src/main.c", '#include "regs.h"\n', opts, fa);
   assert.deepEqual(
-    ctx.headers.map((h) => h.path),
+    ctx.headers.map((h) => norm(h.path)),
     ["/proj/src/regs.h"],
   );
 });
@@ -54,7 +66,7 @@ test("include 解析：相對路徑找不到時，退回全專案 basename 索�
   const fa = fakeFs({ "/proj/inc/hal.h": "#define HAL 1" }, { "hal.h": ["/proj/inc/hal.h"] });
   const ctx = buildContext("/proj/src/main.c", '#include "hal.h"\n', opts, fa);
   assert.deepEqual(
-    ctx.headers.map((h) => h.path),
+    ctx.headers.map((h) => norm(h.path)),
     ["/proj/inc/hal.h"],
   );
 });
@@ -65,7 +77,7 @@ test("include 解析：同名 header 多份時取路徑最短的", () => {
     { "a.h": ["/proj/vendor/deep/a.h", "/proj/a.h"] },
   );
   const ctx = buildContext("/proj/src/main.c", '#include "a.h"\n', opts, fa);
-  assert.equal(ctx.headers[0].path, "/proj/a.h");
+  assert.equal(norm(ctx.headers[0].path), "/proj/a.h");
 });
 
 test("include 解析：忽略角括號的系統 header", () => {
