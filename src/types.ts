@@ -57,6 +57,25 @@ export interface ReviewResult {
   stale?: boolean;
 }
 
+/**
+ * 一則被使用者釘選的意見。除了 Finding 本身，還帶著它來自哪個檔案、
+ * 釘選當下那一行的程式碼快照，以及使用者寫的筆記。
+ *
+ * lineText 是快照而非即時查詢：釘選的重點就是把「當時看到的那個版本」
+ * 留下來，即使檔案之後改了也不受影響。
+ */
+export interface PinnedFinding {
+  key: string;
+  finding: Finding;
+  /** 相對工作區根目錄的路徑，顯示用。 */
+  file: string;
+  /** 跳轉用的絕對路徑。 */
+  filePath: string;
+  lineText: string;
+  comment: string;
+  pinnedAt: string;
+}
+
 export interface HeaderFile {
   path: string;
   text: string;

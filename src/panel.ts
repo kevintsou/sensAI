@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { Finding, ReviewResult } from "./types";
+import { Finding, PinnedFinding, ReviewResult } from "./types";
+import { pinKey } from "./pins";
 
 export type PanelState =
   | { kind: "idle" }
@@ -12,6 +13,14 @@ export type PanelState =
 export interface PanelHandlers {
   onJump(line: number): void;
   onMute(finding: Finding): void;
+  /** 釘選一則目前顯示的意見（index 對應 this.findings）。 */
+  onPin(finding: Finding): void;
+  /** 取消釘選。 */
+  onUnpin(key: string): void;
+  /** 從絕對路徑跳到某行（釘選區的意見可能來自別的檔案）。 */
+  onJumpTo(filePath: string, line: number): void;
+  /** 更新某則釘選的筆記。 */
+  onComment(key: string, text: string): void;
 }
 
 function escapeHtml(s: string): string {
@@ -38,22 +47,44 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private state: PanelState = { kind: "idle" };
   private findings: Finding[] = [];
+  private pins: PinnedFinding[] = [];
 
   constructor(private readonly handlers: PanelHandlers) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
-    view.webview.onDidReceiveMessage((msg: { type: string; index?: number; line?: number }) => {
-      if (msg.type === "jump" && typeof msg.line === "number") {
-        this.handlers.onJump(msg.line);
-      } else if (msg.type === "mute" && typeof msg.index === "number") {
-        const finding = this.findings[msg.index];
-        if (finding) {
-          this.handlers.onMute(finding);
+    view.webview.onDidReceiveMessage(
+      (msg: {
+        type: string;
+        index?: number;
+        line?: number;
+        key?: string;
+        text?: string;
+        filePath?: string;
+      }) => {
+        if (msg.type === "jump" && typeof msg.line === "number") {
+          this.handlers.onJump(msg.line);
+        } else if (msg.type === "jumpTo" && typeof msg.filePath === "string" && typeof msg.line === "number") {
+          this.handlers.onJumpTo(msg.filePath, msg.line);
+        } else if (msg.type === "mute" && typeof msg.index === "number") {
+          const finding = this.findings[msg.index];
+          if (finding) {
+            this.handlers.onMute(finding);
+          }
+        } else if (msg.type === "pin" && typeof msg.index === "number") {
+          const finding = this.findings[msg.index];
+          if (finding) {
+            this.handlers.onPin(finding);
+          }
+        } else if (msg.type === "unpin" && typeof msg.key === "string") {
+          this.handlers.onUnpin(msg.key);
+        } else if (msg.type === "comment" && typeof msg.key === "string" && typeof msg.text === "string") {
+          // 只回存，不重繪 —— 重繪會把使用者正在打字的 textarea 清掉。
+          this.handlers.onComment(msg.key, msg.text);
         }
-      }
-    });
+      },
+    );
     this.render();
   }
 
@@ -68,6 +99,12 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  /** 更新釘選清單並重繪。pin/unpin 之後由 Controller 呼叫。 */
+  setPins(pins: PinnedFinding[]): void {
+    this.pins = pins;
+    this.render();
+  }
+
   reveal(): void {
     void vscode.commands.executeCommand(`${FindingsPanel.viewId}.focus`);
   }
@@ -79,6 +116,49 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   }
 
   private bodyHtml(): string {
+    return this.pinnedHtml() + this.stateHtml();
+  }
+
+  /**
+   * 面板頂部固定區：所有被釘選的意見，跨檔案。
+   *
+   * 這一區不隨當前 review 變動 —— 釘選的重點就是不被後續 review 蓋掉。
+   * 因為釘選是跨檔案持久化的，在 A.c 釘的意見切到 B.c 後仍然在這裡。
+   */
+  private pinnedHtml(): string {
+    if (this.pins.length === 0) {
+      return "";
+    }
+    const items = this.pins
+      .map((p) => {
+        const f = p.finding;
+        const rule = f.rule_id ? `<span class="rule">${escapeHtml(f.rule_id)}</span>` : "";
+        return `<div class="finding sev-${f.severity} pinned-item">
+          <div class="row">
+            <span class="badge">${SEVERITY_LABEL[f.severity]}</span>
+            <button class="link" data-jump-file="${escapeHtml(p.filePath)}" data-jump-line="${f.line}"
+              >${escapeHtml(p.file)}:${f.line}</button>
+            ${rule}
+            <button class="unpin" data-key="${escapeHtml(p.key)}" title="取消釘選">📌 取消釘選</button>
+          </div>
+          <div class="msg">${escapeHtml(f.message)}</div>
+          <dl>
+            <dt>觸發條件</dt><dd>${escapeHtml(f.trigger_condition)}</dd>
+            <dt>後果</dt><dd>${escapeHtml(f.consequence)}</dd>
+            <dt>依據</dt><dd>${escapeHtml(f.evidence)}</dd>
+          </dl>
+          <textarea class="comment" data-key="${escapeHtml(p.key)}"
+            placeholder="加上你的筆記／備註…">${escapeHtml(p.comment)}</textarea>
+        </div>`;
+      })
+      .join("");
+    return `<div class="pinned">
+      <div class="pinned-head">📌 已釘選（${this.pins.length}）</div>
+      ${items}
+    </div>`;
+  }
+
+  private stateHtml(): string {
     switch (this.state.kind) {
       case "idle":
         return `<p class="muted">存檔 C 檔案後會在這裡顯示審查結果。</p>`;
@@ -122,12 +202,17 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       return head + `<p class="ok">沒有發現問題。</p>`;
     }
 
+    const pinnedKeys = new Set(this.pins.map((p) => p.key));
     const render = (f: Finding, i: number) => {
         const rule = f.rule_id
           ? `<span class="rule">${escapeHtml(f.rule_id)}</span>`
           : "";
+        const isPinned = pinnedKeys.has(pinKey(result.filePath, f));
         return `<div class="finding sev-${f.severity}">
           <div class="row">
+            <label class="pin" title="釘住這則意見，不被後續審查蓋掉">
+              <input type="checkbox" data-index="${i}"${isPinned ? " checked" : ""}> 釘選
+            </label>
             <span class="badge">${SEVERITY_LABEL[f.severity]}</span>
             <button class="link" data-line="${f.line}">第 ${f.line} 行</button>
             ${rule}
@@ -238,19 +323,96 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     padding: 2px 8px;
   }
   button.mute:hover { color: var(--vscode-foreground); }
+  .pinned {
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-descriptionForeground));
+  }
+  .pinned-head {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--vscode-foreground);
+  }
+  .pinned-item { background: var(--vscode-inputValidation-infoBackground, var(--vscode-editorWidget-background)); }
+  label.pin {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    user-select: none;
+  }
+  label.pin input { cursor: pointer; margin: 0; }
+  button.unpin {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--vscode-descriptionForeground);
+    border-radius: 2px;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    font-size: 0.8em;
+    padding: 1px 6px;
+  }
+  button.unpin:hover { color: var(--vscode-foreground); }
+  textarea.comment {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 48px;
+    resize: vertical;
+    margin-top: 4px;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, var(--vscode-descriptionForeground));
+    border-radius: 2px;
+    padding: 4px 6px;
+  }
 </style>
 </head>
 <body>
 ${this.bodyHtml()}
 <script nonce="${n}">
   const vscode = acquireVsCodeApi();
-  document.querySelectorAll("button.link").forEach((b) => {
+  document.querySelectorAll("button.link[data-line]").forEach((b) => {
     b.addEventListener("click", () =>
       vscode.postMessage({ type: "jump", line: Number(b.dataset.line) }));
+  });
+  document.querySelectorAll("button.link[data-jump-file]").forEach((b) => {
+    b.addEventListener("click", () =>
+      vscode.postMessage({
+        type: "jumpTo",
+        filePath: b.dataset.jumpFile,
+        line: Number(b.dataset.jumpLine),
+      }));
   });
   document.querySelectorAll("button.mute").forEach((b) => {
     b.addEventListener("click", () =>
       vscode.postMessage({ type: "mute", index: Number(b.dataset.index) }));
+  });
+  document.querySelectorAll("label.pin input[type=checkbox]").forEach((c) => {
+    c.addEventListener("change", () =>
+      vscode.postMessage({ type: "pin", index: Number(c.dataset.index) }));
+  });
+  document.querySelectorAll("button.unpin").forEach((b) => {
+    b.addEventListener("click", () =>
+      vscode.postMessage({ type: "unpin", key: b.dataset.key }));
+  });
+  // 筆記即時回存。用 input 事件（每次打字）加 blur（保險），但只送不重繪 ——
+  // 重繪會清掉正在編輯的 textarea，所以 onComment 那端刻意不觸發 render。
+  document.querySelectorAll("textarea.comment").forEach((t) => {
+    let timer;
+    const send = () =>
+      vscode.postMessage({ type: "comment", key: t.dataset.key, text: t.value });
+    t.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(send, 300);
+    });
+    t.addEventListener("blur", () => {
+      clearTimeout(timer);
+      send();
+    });
   });
 </script>
 </body>

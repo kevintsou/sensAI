@@ -21,6 +21,7 @@ import { buildUserMessage, systemPrompt } from "../out/prompt.js";
 import { detectLanguage } from "../out/language.js";
 import { archFacts } from "../out/abi.js";
 import { muteKey } from "../out/mutes.js";
+import { PinStore, pinKey } from "../out/pins.js";
 
 const ROOT = "/proj";
 
@@ -905,4 +906,93 @@ test("沒有 rule_id 的意見不算編造", () => {
       fabricated: null,
     });
   }
+});
+
+/** 記憶體版的 backing store，測試不必拉起 vscode 的 workspaceState。 */
+function fakeBacking(initial = []) {
+  let data = initial;
+  return {
+    get: () => data,
+    set: (records) => {
+      data = records;
+    },
+    // 測試用：直接看目前存了什麼。
+    _peek: () => data,
+  };
+}
+
+function pinRecord(over = {}) {
+  const f = finding(over.finding ?? {});
+  return {
+    key: over.key ?? pinKey(over.filePath ?? "/proj/a.c", f),
+    finding: f,
+    file: over.file ?? "a.c",
+    filePath: over.filePath ?? "/proj/a.c",
+    lineText: over.lineText ?? "static uint32_t rx_ready;",
+    comment: over.comment ?? "",
+    pinnedAt: over.pinnedAt ?? "2026-08-24T00:00:00.000Z",
+  };
+}
+
+test("pinKey 不受那一行程式碼影響 —— 釘選的筆記不該因為改了程式碼而消失", () => {
+  const f = finding({ line: 3, rule_id: "volatile-shared-state", message: "訊息" });
+  // 跟 muteKey 相反：muteKey 綁 lineText，pinKey 不綁。
+  const k = pinKey("/proj/a.c", f);
+  assert.equal(pinKey("/proj/a.c", { ...f }), k);
+  // 檔案不同、行號不同、訊息不同、規則不同都會是不同的 key。
+  assert.notEqual(pinKey("/proj/b.c", f), k);
+  assert.notEqual(pinKey("/proj/a.c", { ...f, line: 4 }), k);
+  assert.notEqual(pinKey("/proj/a.c", { ...f, message: "別的" }), k);
+  assert.notEqual(pinKey("/proj/a.c", { ...f, rule_id: "other" }), k);
+});
+
+test("釘選：add / has / remove 與持久化", () => {
+  const backing = fakeBacking();
+  const store = new PinStore(backing);
+  const rec = pinRecord();
+  assert.equal(store.has(rec.key), false);
+  store.add(rec);
+  assert.equal(store.has(rec.key), true);
+  assert.equal(backing._peek().length, 1);
+  store.remove(rec.key);
+  assert.equal(store.has(rec.key), false);
+  assert.equal(backing._peek().length, 0);
+});
+
+test("釘選：重複 add 不覆蓋既有筆記", () => {
+  const backing = fakeBacking();
+  const store = new PinStore(backing);
+  const rec = pinRecord({ comment: "我的筆記" });
+  store.add(rec);
+  // 同一個 key 再 add（例如又勾了一次），不能把筆記洗掉。
+  store.add(pinRecord({ key: rec.key, comment: "" }));
+  assert.equal(store.all()[0].comment, "我的筆記");
+});
+
+test("釘選：setComment 更新筆記並存回", () => {
+  const backing = fakeBacking();
+  const store = new PinStore(backing);
+  const rec = pinRecord();
+  store.add(rec);
+  store.setComment(rec.key, "ISR 那條路徑才是真的問題");
+  assert.equal(store.all()[0].comment, "ISR 那條路徑才是真的問題");
+  assert.equal(backing._peek()[0].comment, "ISR 那條路徑才是真的問題");
+  // 找不到的 key 不炸。
+  store.setComment("nonexistent", "無效");
+  assert.equal(store.all().length, 1);
+});
+
+test("釘選：建構時從 backing 載入既有資料", () => {
+  const rec = pinRecord({ comment: "重開後還在" });
+  const store = new PinStore(fakeBacking([rec]));
+  assert.equal(store.has(rec.key), true);
+  assert.equal(store.all()[0].comment, "重開後還在");
+});
+
+test("釘選：clear 全清並回報數量", () => {
+  const store = new PinStore(fakeBacking());
+  store.add(pinRecord({ key: "k1" }));
+  store.add(pinRecord({ key: "k2" }));
+  assert.equal(store.clear(), 2);
+  assert.equal(store.all().length, 0);
 });

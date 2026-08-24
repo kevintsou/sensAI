@@ -18,10 +18,11 @@ import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
 import { EndpointUnavailableError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
+import { PinStore, PinBackingStore, pinKey } from "./pins";
 import { SingleFlight } from "./singleflight";
 import { Debouncer } from "./debounce";
 import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
-import { DroppedFinding, Finding, ReviewContext, Rule } from "./types";
+import { DroppedFinding, Finding, PinnedFinding, ReviewContext, Rule } from "./types";
 
 /**
  * normal —— 照 planReview() 的結果跑。
@@ -92,12 +93,17 @@ class Controller {
   private readonly burstFindings = new Map<string, CarriedFindings>();
   private readonly documents = new Map<string, vscode.TextDocument>();
   private lastSource = new Map<string, string>();
+  private readonly pins: PinStore;
 
   constructor(
     private readonly panel: FindingsPanel,
     private readonly status: vscode.StatusBarItem,
     private readonly output: vscode.OutputChannel,
-  ) {}
+    backing: PinBackingStore,
+  ) {
+    this.pins = new PinStore(backing);
+    this.panel.setPins(this.pins.all());
+  }
 
   private get workspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -504,6 +510,60 @@ class Controller {
   }
 
   /**
+   * 切換釘選。checkbox 的 change 事件勾與不勾都會進來，所以這裡看目前狀態
+   * 決定是釘還是取消 —— 使用者取消勾選一則已釘的意見時也要能拿掉。
+   */
+  togglePin(finding: Finding): void {
+    const root = this.workspaceRoot;
+    const editor = vscode.window.activeTextEditor;
+    const filePath = editor?.document.uri.fsPath;
+    if (!root || !filePath) {
+      return;
+    }
+    const key = pinKey(filePath, finding);
+    if (this.pins.has(key)) {
+      this.pins.remove(key);
+    } else {
+      const source = this.lastSource.get(filePath) ?? editor!.document.getText();
+      const lineText = source.split("\n")[finding.line - 1] ?? "";
+      const record: PinnedFinding = {
+        key,
+        finding,
+        file: path.relative(root, filePath),
+        filePath,
+        lineText,
+        comment: "",
+        pinnedAt: new Date().toISOString(),
+      };
+      this.pins.add(record);
+    }
+    this.panel.setPins(this.pins.all());
+  }
+
+  unpin(key: string): void {
+    this.pins.remove(key);
+    this.panel.setPins(this.pins.all());
+  }
+
+  /** 更新釘選的筆記。刻意不重繪 —— 重繪會清掉使用者正在編輯的 textarea。 */
+  setPinComment(key: string, text: string): void {
+    this.pins.setComment(key, text);
+  }
+
+  /** 跳到某個檔案的某一行（釘選區的意見可能來自別的檔案）。 */
+  async jumpToFile(filePath: string, line: number): Promise<void> {
+    try {
+      const doc = await vscode.workspace.openTextDocument(filePath);
+      const editor = await vscode.window.showTextDocument(doc);
+      const pos = new vscode.Position(Math.max(0, line - 1), 0);
+      editor.selection = new vscode.Selection(pos, pos);
+      editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+    } catch {
+      void vscode.window.showWarningMessage(`sensAI：開不了 ${filePath}`);
+    }
+  }
+
+  /**
    * 建立 `.sensai/` 骨架。
    *
    * 規則不隨擴充散布 —— 那是專案的資產。但裝了 vsix 的人手上不會有
@@ -615,8 +675,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const panel = new FindingsPanel({
     onJump: (line) => controller.jumpTo(line),
     onMute: (finding) => void controller.muteFinding(finding),
+    onPin: (finding) => controller.togglePin(finding),
+    onUnpin: (key) => controller.unpin(key),
+    onJumpTo: (filePath, line) => void controller.jumpToFile(filePath, line),
+    onComment: (key, text) => controller.setPinComment(key, text),
   });
-  controller = new Controller(panel, status, output);
+  // 釘選與筆記存到 workspaceState：專案級、跨重啟保留、不進版控。
+  const PIN_KEY = "sensai.pins";
+  const backing: PinBackingStore = {
+    get: () => context.workspaceState.get<PinnedFinding[]>(PIN_KEY, []),
+    set: (records) => {
+      void context.workspaceState.update(PIN_KEY, records);
+    },
+  };
+  controller = new Controller(panel, status, output, backing);
   controller.reloadProjectFiles();
 
   context.subscriptions.push(

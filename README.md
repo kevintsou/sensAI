@@ -25,6 +25,9 @@ similar hardware conventions.
 - Requires source-grounded evidence and drops fabricated references.
 - Keeps suggestions in a dedicated panel rather than asserting that AI output
   is a compiler error.
+- Pin findings you want to keep. Pinned findings stay in a fixed section at the
+  top of the panel across reviews and restarts, each with a note box for your
+  own comments.
 
 ### Quick start
 
@@ -129,6 +132,12 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 檔案 —— 「無法判定」不等於「沒有改動」。
 
 `sensAI: Review Current File` 不受此限制，一律照審。
+
+### 釘選意見
+
+每則意見旁有一個「釘選」勾選框。釘住的意見會集中到側欄**頂部的固定區**，不會被
+後續審查蓋掉，跨檔案顯示，也會跨 VS Code 重啟保留。每則釘選的意見都附一個文字
+框，可以填自己的筆記／備註。釘選與筆記存在 workspace state，不進版控。
 
 ### 頻繁存檔
 

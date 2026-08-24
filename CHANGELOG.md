@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Pin a finding to keep it from being replaced by later reviews. Each finding now has a pin checkbox; pinned findings collect into a fixed section at the top of the panel, across files, and survive a VS Code restart. Every pinned finding carries a free-text note box for your own comments. Pins and notes are stored in the workspace state, not in version control.
+
 ## 0.3.1 — 2026-08-24
 
 ### Fixed
