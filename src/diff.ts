@@ -65,6 +65,45 @@ export function mergeRanges(ranges: LineRange[]): LineRange[] {
   return out;
 }
 
+/** 這次審查是誰發動的。存檔與手動觸發對「沒有改動」的處置不同。 */
+export type ReviewTrigger = "save" | "manual";
+
+/**
+ * 這次要怎麼審。
+ *
+ * - `skip`      不送任何東西出去。
+ * - `full`      單階段，審整份檔案。
+ * - `two-stage` 階段一只看改動處、階段二審整份，最後合併去重。
+ */
+export type ReviewPlan =
+  | { kind: "skip"; reason: "unchanged" }
+  | { kind: "full" }
+  | { kind: "two-stage"; changed: LineRange[] };
+
+/**
+ * 決定這次存檔／手動觸發要不要審、以及要用哪種流程。
+ *
+ * 存檔的觸發條件是「存檔**且**檔案相對 HEAD 有改動」。兩者缺一就不審 ——
+ * 沒有改動的存檔（改完又改回來、格式化工具沒動到東西、單純按慣性 Ctrl+S）
+ * 送出去只是重跑一次上一次剛跑過的內容，白花一次請求。
+ *
+ * 但「無法判定」不等於「沒有改動」：檔案未追蹤或這裡根本不是 git repo 時
+ * `changed` 是 null，那種情況照樣要審，否則非 git 專案會變成完全不會動。
+ * 這也是為什麼 changedRanges() 刻意區分 null 與空陣列。
+ *
+ * 手動觸發一律照審。使用者明確叫了 Review Current File，回他一句「沒有改動」
+ * 不是他要的 —— 剛 commit 完想重看一次整份檔案是完全合理的用法。
+ */
+export function planReview(trigger: ReviewTrigger, changed: ChangedRanges): ReviewPlan {
+  if (changed === null) {
+    return { kind: "full" };
+  }
+  if (changed.length === 0) {
+    return trigger === "save" ? { kind: "skip", reason: "unchanged" } : { kind: "full" };
+  }
+  return { kind: "two-stage", changed };
+}
+
 export function isInRanges(line: number, ranges: LineRange[]): boolean {
   return ranges.some((r) => line >= r.start && line <= r.end);
 }

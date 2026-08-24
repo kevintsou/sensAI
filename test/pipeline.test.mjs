@@ -11,7 +11,7 @@ import {
   filterFindings,
   mergeStageFindings,
 } from "../out/filter.js";
-import { mergeRanges, parseDiffRanges } from "../out/diff.js";
+import { mergeRanges, parseDiffRanges, planReview } from "../out/diff.js";
 import { normalizeRuleId } from "../out/review.js";
 import { loadRules, rulesPath } from "../out/rules.js";
 import { buildUserMessage, systemPrompt } from "../out/prompt.js";
@@ -399,6 +399,31 @@ test("組語的 prompt 用 asm 圍籬與對應的措辭", () => {
 });
 
 // ---------------------------------------------------------------- 兩階段
+
+test("存檔且有改動，才走兩階段", () => {
+  const changed = [{ start: 10, end: 12 }];
+  assert.deepEqual(planReview("save", changed), { kind: "two-stage", changed });
+});
+
+test("存檔但相對 HEAD 沒有改動：整次跳過，不送任何東西出去", () => {
+  assert.deepEqual(planReview("save", []), { kind: "skip", reason: "unchanged" });
+});
+
+test("無法判定改動範圍不等於沒有改動，未追蹤的檔案照樣審", () => {
+  // changedRanges() 對未追蹤或非 git repo 回 null。把 null 當成「沒有改動」
+  // 會讓非 git 專案完全不會觸發審查。
+  assert.deepEqual(planReview("save", null), { kind: "full" });
+});
+
+test("手動觸發不受改動與否影響，沒有改動也照審整份", () => {
+  assert.deepEqual(planReview("manual", []), { kind: "full" });
+  assert.deepEqual(planReview("manual", null), { kind: "full" });
+});
+
+test("手動觸發遇到有改動的檔案，仍然走兩階段", () => {
+  const changed = [{ start: 3, end: 3 }];
+  assert.deepEqual(planReview("manual", changed), { kind: "two-stage", changed });
+});
 
 test("diff 解析：取出新檔案側的改動行號範圍", () => {
   const diff = [

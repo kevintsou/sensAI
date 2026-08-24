@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext } from "./context";
-import { changedRanges, describeRanges, gitCwd } from "./diff";
+import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
 import { applySeverityBudget, filterFindings, mergeStageFindings } from "./filter";
 import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
@@ -87,7 +87,7 @@ class Controller {
     }
   }
 
-  async review(document: vscode.TextDocument): Promise<void> {
+  async review(document: vscode.TextDocument, trigger: ReviewTrigger = "manual"): Promise<void> {
     const root = this.workspaceRoot;
     if (!root) {
       return;
@@ -141,6 +141,18 @@ class Controller {
     // 相對 git HEAD 的改動行號。null 代表檔案未追蹤或不在 git repo —— 那種
     // 情況下階段一與階段二的範圍會完全相同，跑兩次只是浪費，退回單階段。
     const changed = await changedRanges(filePath, gitCwd(filePath));
+    const plan = planReview(trigger, changed);
+
+    // 存檔但檔案沒有任何改動：不審，也不送任何東西出去。
+    // 面板維持原狀 —— 上一次的意見對這份沒變過的檔案仍然成立，清掉反而是退步。
+    if (plan.kind === "skip") {
+      this.output.appendLine(
+        `[review] ${path.basename(filePath)} 相對 HEAD 沒有改動，存檔不觸發審查。` +
+          "要重看整份檔案請用 sensAI: Review Current File。",
+      );
+      this.setStatus("$(check) sensAI", "沒有改動，未審查");
+      return;
+    }
 
     this.inFlight.add(filePath);
     this.panel.setState({
@@ -206,9 +218,10 @@ class Controller {
       let kept: Finding[];
       let dropped: DroppedFinding[];
 
-      if (changed && changed.length > 0) {
+      if (plan.kind === "two-stage") {
         // 兩階段並行：階段一只看剛改的行，會先回來；階段二審整份檔案。
         // 並行而不是依序，總等待時間才不會是兩者相加。
+        const changed = plan.changed;
         this.output.appendLine(
           `[review] 兩階段：階段一只看第 ${describeRanges(changed)} 行，階段二審整份檔案`,
         );
@@ -261,7 +274,7 @@ class Controller {
       }
 
       const durationMs = Date.now() - started;
-      publish(kept, dropped, changed && changed.length > 0 ? "full" : undefined);
+      publish(kept, dropped, plan.kind === "two-stage" ? "full" : undefined);
 
       appendAudit(root, this.config, {
         ts: new Date().toISOString(),
@@ -453,7 +466,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (readSettings().enabled) {
-        void controller.review(doc);
+        void controller.review(doc, "save");
       }
     }),
 
@@ -461,7 +474,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) {
         panel.reveal();
-        void controller.review(doc);
+        void controller.review(doc, "manual");
       }
     }),
     vscode.commands.registerCommand("sensai.showPanel", () => panel.reveal()),

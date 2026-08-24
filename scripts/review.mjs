@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { loadProjectConfig } from "../out/config.js";
 import { buildContext } from "../out/context.js";
 import { filterFindings, mergeStageFindings } from "../out/filter.js";
-import { changedRanges, describeRanges, gitCwd } from "../out/diff.js";
+import { changedRanges, describeRanges, gitCwd, planReview } from "../out/diff.js";
 import { detectLanguage, LANGUAGE_LABEL } from "../out/language.js";
 import { blockedPaths } from "../out/privacy.js";
 import { requestReview, EndpointUnavailableError } from "../out/review.js";
@@ -66,6 +66,8 @@ const USAGE = `用法：npm run review -- <檔案> [選項]
   --model <name>     送給 CCR 的 model 欄位，也就是路由 key
   --arch <id>        覆寫 assembly.arch（riscv32-andes-v5 / armv7e-m）
   --root <dir>       專案根目錄。省略時從檔案往上找含 .sensai/ 的目錄
+  --staged           走與擴充相同的兩階段流程（改動處 + 整份，最後去重）。
+                     檔案相對 HEAD 沒有改動時退回單階段整份審查
   --show-prompt      印出實際送出的 prompt 就結束，不呼叫 CCR
   --json             輸出 JSON，方便串接
 `;
@@ -157,20 +159,27 @@ async function main() {
   }
 
   // --staged 走跟擴充相同的兩階段流程，才驗得到去重與範圍限制。
+  //
+  // 要不要走兩階段由 planReview() 決定，跟擴充共用同一份規則 —— 這裡曾經有一份
+  // 等價但獨立的判斷，改規則時很容易只改到一邊。
+  //
+  // trigger 傳 "manual"：命令列是使用者明確叫的，沒有改動時退回單階段審整份，
+  // 不像存檔那樣整個跳過。
   let changed = null;
   if (opts.staged) {
-    changed = await changedRanges(filePath, gitCwd(filePath));
-    if (!changed || changed.length === 0) {
+    const ranges = await changedRanges(filePath, gitCwd(filePath));
+    const plan = planReview("manual", ranges);
+    if (plan.kind === "two-stage") {
+      changed = plan.changed;
+      console.error(C.dim(`階段一只看第 ${describeRanges(changed)} 行`));
+    } else {
       console.error(
         C.yellow(
-          changed === null
+          ranges === null
             ? "檔案未被 git 追蹤，無法算改動範圍 —— 退回單階段。"
             : "相對 HEAD 沒有改動 —— 退回單階段。",
         ),
       );
-      changed = null;
-    } else {
-      console.error(C.dim(`階段一只看第 ${describeRanges(changed)} 行`));
     }
   }
 
