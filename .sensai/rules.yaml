@@ -254,3 +254,46 @@
           dma_cache_clean(frame, sizeof frame);
           dma_start(DMA_CH0, frame, sizeof frame);
       }
+
+- id: int-to-pointer-without-cast
+  languages: [c]
+  severity: error
+  rule: |
+    把整數常數直接指定給指標，而且那個整數不是 0，是不合法的寫法。除了整數
+    常數 0（null pointer constant）以外，整數與指標之間沒有隱含轉換；C 標準
+    把這種寫法列為約束違反（constraint violation），編譯器必須發出診斷。多數
+    編譯器只給 warning（makes pointer from integer without a cast）就放行，
+    打開 -Werror 才會擋成 error，所以它很容易被忽略、混進正式碼。
+
+        int *ptr = 0x3;      // 不合法：0x3 是整數，不是指標
+
+    這種寫法通常是兩種筆誤之一，兩種都要指出來：
+
+    一、少打了一個 *。作者的本意其實是寫值進 ptr 指到的地方：
+
+        *ptr = 0x3;          // 改的是指向的記憶體，不是指標本身
+
+    少一個 * 語意完全相反 —— 一個改指標、一個改指標指到的內容 —— 而且加了 *
+    之後編譯器不會再警告，錯誤就這樣被藏起來。
+
+    二、真的想讓指標指向固定位址（MMIO 暫存器、固定位址），但漏了轉型。
+    正確寫法是明確轉型：
+
+        volatile uint32_t *reg = (volatile uint32_t *)0x40001000;
+
+    這種情況要順帶檢查位址對齊：常數位址對型別大小取餘數不為零就是確定的
+    錯誤，之後對它解參考會踩到未對齊存取的問題。
+
+    回報時把「你要的是哪一個」講清楚：是 *ptr = 0x3（改記憶體），還是
+    (T *)ADDR（指到位址）。只說「型別不符」對作者沒有幫助。
+  except: |
+    整數常數 0 指定給指標是合法的（null pointer constant），不要報。
+    已經有明確轉型的（例如 (uint32_t *)0x40001000）不算這條問題。
+    指標之間、或相容型別的指標指定，不算問題。
+  examples:
+    bad: |
+      int *ptr = 0x3;              /* 整數塞進指標，且非 0 —— 多半是漏了 * 或漏了轉型 */
+    good: |
+      int *ptr = &value;           /* 指向實際物件 */
+      *ptr = 0x3;                   /* 若本意是寫值：改的是指向的記憶體 */
+      volatile uint32_t *reg = (volatile uint32_t *)0x40001000; /* 若本意是指到位址：明確轉型 */
