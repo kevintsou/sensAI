@@ -18,6 +18,7 @@ similar hardware conventions.
 
 - Reviews `.c`, `.h`, `.s`, and `.S` files on save or on demand.
 - Skips a save with no changes; an on-demand review always runs.
+- Coalesces saves that arrive mid-review into one re-run on the latest content.
 - Resolves project-local includes and injects ABI facts for assembly reviews.
 - Uses natural-language rules maintained in version control.
 - Requires source-grounded evidence and drops fabricated references.
@@ -126,6 +127,16 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 檔案 —— 「無法判定」不等於「沒有改動」。
 
 `sensAI: Review Current File` 不受此限制，一律照審。
+
+### 頻繁存檔
+
+同一個檔案同時只會有一輪審查。這輪還在跑時進來的存檔會**併成一次補跑**（不是丟掉，
+也不是各跑一輪），補跑用的是當下最新的檔案內容。所以連按存檔、或邊打字邊自動存檔，
+都會塌縮成「現在這輪 + 最後補跑一次」，請求數不隨存檔次數線性增加，而最後一次存檔的
+內容保證會被審到。
+
+審查期間檔案又被改過時，結果仍然會顯示，但側欄會標明行號是對著送出當下那一版算的、
+跳行可能會偏。
 
 ### 限制
 

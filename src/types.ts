@@ -49,6 +49,11 @@ export interface ReviewResult {
   stage?: "changed" | "full";
   /** 因為意見過多而被收起來的低嚴重度意見。內容完整，只是預設不展開。 */
   collapsed?: Finding[];
+  /**
+   * 審查期間檔案又被改過，行號是對著送出當下那一版算的。
+   * 意見本身仍然有參考價值，但跳行可能會落在別的地方，所以要讓使用者知道。
+   */
+  stale?: boolean;
 }
 
 export interface HeaderFile {

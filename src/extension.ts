@@ -12,6 +12,7 @@ import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
 import { EndpointUnavailableError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
+import { SingleFlight } from "./singleflight";
 import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
 import { DroppedFinding, Finding, ReviewContext, Rule } from "./types";
 
@@ -47,7 +48,19 @@ class Controller {
     assemblyArch: DEFAULT_ARCH_ID,
   };
   private mutes: MuteStore | undefined;
-  private inFlight = new Set<string>();
+  /**
+   * 同一個檔案同時只跑一輪審查；跑的期間進來的觸發併成一次補跑，不是丟掉 ——
+   * 丟掉的話，使用者最後那次存檔的內容可能永遠不會被審到。
+   */
+  private readonly saves = new SingleFlight<ReviewTrigger>({
+    // manual 蓋過 save，反過來不蓋。使用者明確叫過一次 Review Current File，
+    // 補跑就不該因為中間夾了幾次存檔而降級成「沒有改動就跳過」。
+    merge: (existing, incoming) =>
+      incoming === "manual" || existing === undefined ? incoming : existing,
+    onCoalesce: (key) =>
+      this.output.appendLine(`[review] ${path.basename(key)} 還在審查中，這次觸發併入下一輪。`),
+    onRerun: (key) => this.output.appendLine(`[review] 用最新內容補跑 ${path.basename(key)}。`),
+  });
   private lastSource = new Map<string, string>();
 
   constructor(
@@ -87,24 +100,40 @@ class Controller {
     }
   }
 
+  /**
+   * 同一個檔案同時只跑一輪審查。這一輪還在跑時進來的觸發會記在 pending，
+   * 等這輪結束用**當下最新的內容**補跑一次。
+   *
+   * 連按存檔、或邊打字邊自動存檔，都會塌縮成「現在這輪 + 最後補跑一次」，
+   * 請求數不會隨存檔次數線性增加，而最後一次存檔的內容保證會被審到。
+   */
   async review(document: vscode.TextDocument, trigger: ReviewTrigger = "manual"): Promise<void> {
+    const filePath = document.uri.fsPath;
+    // 補跑時 document 是同一個物件參考，getText() 讀到的一定是當下最新的內容。
+    await this.saves.run(filePath, trigger, (t) => this.runReview(document, t, filePath));
+  }
+
+  private async runReview(
+    document: vscode.TextDocument,
+    trigger: ReviewTrigger,
+    filePath: string,
+  ): Promise<void> {
     const root = this.workspaceRoot;
     if (!root) {
       return;
     }
-    const filePath = document.uri.fsPath;
     // 用副檔名判斷，不用 languageId —— .s 在沒裝組語擴充時會是 plaintext。
     const language = detectLanguage(filePath);
     if (!language) {
-      return;
-    }
-    if (this.inFlight.has(filePath)) {
       return;
     }
 
     const settings = readSettings();
     const source = document.getText();
     this.lastSource.set(filePath, source);
+    // 送出當下的版本。審查要跑好幾秒，這期間使用者通常還在打字 ——
+    // 結果回來時行號是對著這一版算的，未必還對得上編輯器裡的內容。
+    const sentVersion = document.version;
 
     const ctx: ReviewContext = buildContext(filePath, source, {
       workspaceRoot: root,
@@ -154,7 +183,6 @@ class Controller {
       return;
     }
 
-    this.inFlight.add(filePath);
     this.panel.setState({
       kind: "reviewing",
       file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${
@@ -191,6 +219,9 @@ class Controller {
       dropped: DroppedFinding[],
       stage: "changed" | "full" | undefined,
     ) => {
+      // 不因為過期就把結果丟掉 —— 審查期間繼續打字是常態，丟掉的話意見會經常
+      // 完全不出現。改成照常顯示但標記出來，讓使用者知道行號可能已經偏移。
+      const stale = document.version !== sentVersion;
       const { shown, collapsed } = applySeverityBudget(findings, settings.maxFindings);
       if (collapsed.length > 0) {
         this.output.appendLine(
@@ -209,6 +240,7 @@ class Controller {
           headersIncluded: ctx.headers.map((h) => h.path),
           contextTruncated: ctx.truncated,
           stage,
+          stale,
         },
       });
       return shown.length + collapsed.length;
@@ -305,8 +337,6 @@ class Controller {
         this.setStatus("$(error) sensAI", message);
         this.output.appendLine(`[review] ${message}`);
       }
-    } finally {
-      this.inFlight.delete(filePath);
     }
   }
 

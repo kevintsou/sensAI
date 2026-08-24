@@ -12,6 +12,7 @@ import {
   mergeStageFindings,
 } from "../out/filter.js";
 import { mergeRanges, parseDiffRanges, planReview } from "../out/diff.js";
+import { SingleFlight } from "../out/singleflight.js";
 import { normalizeRuleId } from "../out/review.js";
 import { loadRules, rulesPath } from "../out/rules.js";
 import { buildUserMessage, systemPrompt } from "../out/prompt.js";
@@ -399,6 +400,134 @@ test("組語的 prompt 用 asm 圍籬與對應的措辭", () => {
 });
 
 // ---------------------------------------------------------------- 兩階段
+
+/** merge 規則與 Controller 用的那份相同：manual 蓋過 save，反過來不蓋。 */
+function saveFlight(log = []) {
+  return new SingleFlight({
+    merge: (existing, incoming) =>
+      incoming === "manual" || existing === undefined ? incoming : existing,
+    onCoalesce: () => log.push("coalesce"),
+    onRerun: () => log.push("rerun"),
+  });
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test("檢查與登記之間不讓出事件迴圈，連續兩次觸發不會並行", async () => {
+  // 這正是原本的 bug：守衛檢查在 await 之前、登記在 await 之後，
+  // 兩次落在同一個空窗裡的存檔會雙雙通過。
+  const flight = saveFlight();
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  const task = async () => {
+    concurrent++;
+    maxConcurrent = Math.max(maxConcurrent, concurrent);
+    await tick();
+    concurrent--;
+  };
+
+  await Promise.all([
+    flight.run("a.c", "save", task),
+    flight.run("a.c", "save", task),
+  ]);
+
+  assert.equal(maxConcurrent, 1);
+});
+
+test("審查期間進來的觸發不會被丟掉，會用最新內容補跑", async () => {
+  const flight = saveFlight();
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+
+  const first = flight.run("a.c", "save", async (v) => {
+    seen.push(v);
+    await gate;
+  });
+  await tick();
+
+  // 第一輪還沒結束就再存兩次 —— 兩次都該併成「一次」補跑，而不是各跑一輪。
+  assert.equal(await flight.run("a.c", "save", async (v) => seen.push(v)), "coalesced");
+  assert.equal(await flight.run("a.c", "save", async (v) => seen.push(v)), "coalesced");
+
+  release();
+  await first;
+  assert.deepEqual(seen, ["save", "save"]); // 原本這一輪 + 一次補跑
+});
+
+test("補跑期間又進來的觸發仍然被併入，不會變成並行", async () => {
+  const flight = saveFlight();
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let runs = 0;
+
+  const task = async () => {
+    concurrent++;
+    maxConcurrent = Math.max(maxConcurrent, concurrent);
+    runs++;
+    if (runs === 1) {
+      // 第一輪跑到一半時排進一次補跑
+      void flight.run("a.c", "save", task);
+    } else if (runs === 2) {
+      // 補跑跑到一半時再排一次 —— 這裡若放開 inFlight 就會並行
+      void flight.run("a.c", "save", task);
+    }
+    await tick();
+    concurrent--;
+  };
+
+  await flight.run("a.c", "save", task);
+  assert.equal(maxConcurrent, 1);
+  assert.equal(runs, 3);
+});
+
+test("補跑的 trigger：manual 蓋過 save", async () => {
+  const flight = saveFlight();
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+
+  const first = flight.run("a.c", "save", async (v) => {
+    seen.push(v);
+    if (seen.length === 1) await gate;
+  });
+  await tick();
+  await flight.run("a.c", "save", async () => {});
+  await flight.run("a.c", "manual", async () => {});
+  await flight.run("a.c", "save", async () => {});
+  release();
+  await first;
+
+  // 中間夾了幾次存檔，補跑仍然是 manual —— 不會降級成「沒有改動就跳過」。
+  assert.deepEqual(seen, ["save", "manual"]);
+});
+
+test("不同檔案互不阻擋", async () => {
+  const flight = saveFlight();
+  const seen = [];
+  await Promise.all([
+    flight.run("a.c", "save", async () => seen.push("a")),
+    flight.run("b.c", "save", async () => seen.push("b")),
+  ]);
+  assert.deepEqual(seen.sort(), ["a", "b"]);
+});
+
+test("工作丟例外也要放開 inFlight，否則該檔案永遠不會再被審", async () => {
+  const flight = saveFlight();
+  await assert.rejects(
+    flight.run("a.c", "save", async () => {
+      throw new Error("boom");
+    }),
+    /boom/,
+  );
+  assert.equal(flight.isInFlight("a.c"), false);
+
+  let ran = false;
+  await flight.run("a.c", "save", async () => {
+    ran = true;
+  });
+  assert.equal(ran, true);
+});
 
 test("存檔且有改動，才走兩階段", () => {
   const changed = [{ start: 10, end: 12 }];

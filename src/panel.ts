@@ -103,6 +103,9 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       result.stage === "changed"
         ? `<div class="stage">只看剛改動的行 · 完整審查進行中…</div>`
         : "";
+    const staleNote = result.stale
+      ? `<div class="stale">審查期間檔案又被改過，行號是對著送出當下那一版算的，跳行可能會偏。</div>`
+      : "";
 
     const head = `<div class="meta">
       <div>${escapeHtml(result.filePath.split(/[\\/]/).pop() ?? result.filePath)}</div>
@@ -111,7 +114,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         ${(result.durationMs / 1000).toFixed(1)}s${
           result.dropped.length > 0 ? ` · 濾除 ${result.dropped.length} 則` : ""
         }${result.contextTruncated ? " · 上下文已截斷" : ""}</div>
-    </div>${stageNote}`;
+    </div>${stageNote}${staleNote}`;
 
     if (result.findings.length === 0 && collapsed.length === 0) {
       return head + `<p class="ok">沒有發現問題。</p>`;
@@ -175,6 +178,12 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     line-height: 1.5;
   }
   .muted { color: var(--vscode-descriptionForeground); }
+  .stale {
+    color: var(--vscode-inputValidation-warningForeground, var(--vscode-descriptionForeground));
+    border-left: 2px solid var(--vscode-inputValidation-warningBorder, var(--vscode-descriptionForeground));
+    padding-left: 6px;
+    margin: 4px 0;
+  }
   .ok { color: var(--vscode-descriptionForeground); }
   .bad { color: var(--vscode-errorForeground); }
   .meta { margin-bottom: 12px; }
