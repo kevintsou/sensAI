@@ -264,12 +264,18 @@ class Controller {
       return;
     }
 
-    this.panel.setState({
-      kind: "reviewing",
-      file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${
-        syntaxOnly ? "沒有規則，只檢查語法" : `${rules.length} 條規則`
-      }）`,
-    });
+    // 面板已有結果時不要清空回「審查中」—— 連續存檔會一輪輪蓋掉剛顯示的意見，
+    // 造成空窗。留著上一輪結果、只在頂部標「更新中」，等新結果到位再蓋過去。
+    if (this.panel.hasResult()) {
+      this.panel.markUpdating();
+    } else {
+      this.panel.setState({
+        kind: "reviewing",
+        file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${
+          syntaxOnly ? "沒有規則，只檢查語法" : `${rules.length} 條規則`
+        }）`,
+      });
+    }
     this.setStatus("$(sync~spin) sensAI", syntaxOnly ? "只檢查語法（沒有規則）" : "審查中");
 
     const started = Date.now();

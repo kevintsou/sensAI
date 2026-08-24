@@ -48,6 +48,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   private state: PanelState = { kind: "idle" };
   private findings: Finding[] = [];
   private pins: PinnedFinding[] = [];
+  /** 新一輪審查進行中，但畫面上還留著上一輪的結果。只在有結果可留時為 true。 */
+  private updating = false;
 
   constructor(private readonly handlers: PanelHandlers) {}
 
@@ -90,12 +92,34 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 
   setState(state: PanelState): void {
     this.state = state;
+    // 任何新的明確狀態進來，就不再是「保留舊結果、更新中」了。
+    this.updating = false;
     // 收合的意見也要能按「這是誤報」，索引接在顯示的那些後面 —— 順序必須
     // 跟 resultHtml 的 render 呼叫一致。
     this.findings =
       state.kind === "result"
         ? [...state.result.findings, ...(state.result.collapsed ?? [])]
         : [];
+    this.render();
+  }
+
+  /** 面板上是否已有可顯示的審查結果。 */
+  hasResult(): boolean {
+    return this.state.kind === "result";
+  }
+
+  /**
+   * 標記「新一輪審查進行中」，但**保留**畫面上現有的結果。
+   *
+   * 連續存檔時，每一輪都從頭 setState(reviewing) 會把上一輪剛顯示的意見清成
+   * 空白，造成一段空窗。改成留著舊結果、只在頂部加一條「更新中…」，等新結果
+   * 到位再由 setState 蓋過去。只有已經有結果可留時才走這條路。
+   */
+  markUpdating(): void {
+    if (this.state.kind !== "result") {
+      return;
+    }
+    this.updating = true;
     this.render();
   }
 
@@ -179,6 +203,10 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 
   private resultHtml(result: ReviewResult): string {
     const collapsed = result.collapsed ?? [];
+    // 保留舊結果、新一輪進行中時，頂部一條輕量提示；不清畫面。
+    const updatingNote = this.updating
+      ? `<div class="updating">↻ 更新中，仍顯示上一次的結果…</div>`
+      : "";
     const stageNote =
       result.stage === "changed"
         ? `<div class="stage">只看剛改動的行 · 完整審查進行中…</div>`
@@ -189,7 +217,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       ? `<div class="stale">審查期間檔案又被改過，行號是對著送出當下那一版算的，跳行可能會偏。</div>`
       : "";
 
-    const head = `<div class="meta">
+    const head = `${updatingNote}<div class="meta">
       <div>${escapeHtml(result.filePath.split(/[\\/]/).pop() ?? result.filePath)}</div>
       <div class="muted">${result.findings.length} 則意見 ·
         附帶 ${result.headersIncluded.length} 個 header ·
@@ -270,6 +298,11 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     border-left: 2px solid var(--vscode-inputValidation-warningBorder, var(--vscode-descriptionForeground));
     padding-left: 6px;
     margin: 4px 0;
+  }
+  .updating {
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.9em;
+    margin-bottom: 8px;
   }
   .ok { color: var(--vscode-descriptionForeground); }
   .bad { color: var(--vscode-errorForeground); }
