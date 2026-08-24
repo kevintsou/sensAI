@@ -4,6 +4,10 @@ All notable changes to sensAI are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Finding labels (trigger, consequence, evidence) are now visually distinct from their body text. The label and its content had nearly the same colour and ran together; labels are now a smaller uppercase bold caption with more space above, and the body text is given an explicit bright foreground.
+
 ### Fixed
 
 - A rapid series of saves no longer blanks the panel between reviews. Each new review used to reset the panel to "reviewing", wiping the findings the previous round had just shown and leaving a long empty gap until the next result arrived. When the panel already holds a result, a new review now keeps it on screen with an "updating" note at the top and replaces it only once the fresh result lands. The first review of a file, with nothing to keep, still shows "reviewing" as before.

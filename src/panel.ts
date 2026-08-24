@@ -333,11 +333,17 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   .msg { font-weight: 600; margin-bottom: 6px; }
   dl { margin: 0 0 8px; }
   dt {
-    font-size: 0.85em;
+    font-size: 0.8em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     color: var(--vscode-descriptionForeground);
-    margin-top: 4px;
+    margin-top: 8px;
   }
-  dd { margin: 0 0 2px; }
+  dd {
+    margin: 1px 0 2px;
+    color: var(--vscode-foreground);
+  }
   button.link {
     background: none;
     border: none;
