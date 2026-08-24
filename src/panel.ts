@@ -102,7 +102,9 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     const stageNote =
       result.stage === "changed"
         ? `<div class="stage">只看剛改動的行 · 完整審查進行中…</div>`
-        : "";
+        : result.stage === "changed-only"
+          ? `<div class="stage">只看剛改動的行 · 連續存檔中，等停下來再做完整審查</div>`
+          : "";
     const staleNote = result.stale
       ? `<div class="stale">審查期間檔案又被改過，行號是對著送出當下那一版算的，跳行可能會偏。</div>`
       : "";

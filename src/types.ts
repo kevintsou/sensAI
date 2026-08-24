@@ -44,9 +44,10 @@ export interface ReviewResult {
   contextTruncated: boolean;
   /**
    * "changed" 是階段一（只看剛改動的行）的先期結果，之後還會被階段二補上；
-   * "full" 是完整結果。省略代表沒有分階段。
+   * "changed-only" 也只看改動的行，但因為連續觸發而暫時不做完整審查 ——
+   * 等安靜下來才會補；"full" 是完整結果。省略代表沒有分階段。
    */
-  stage?: "changed" | "full";
+  stage?: "changed" | "changed-only" | "full";
   /** 因為意見過多而被收起來的低嚴重度意見。內容完整，只是預設不展開。 */
   collapsed?: Finding[];
   /**

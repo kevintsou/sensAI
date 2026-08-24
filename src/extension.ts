@@ -13,11 +13,20 @@ import { appendAudit, blockedPaths } from "./privacy";
 import { EndpointUnavailableError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
 import { SingleFlight } from "./singleflight";
+import { Debouncer } from "./debounce";
 import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
 import { DroppedFinding, Finding, ReviewContext, Rule } from "./types";
 
+/**
+ * normal —— 照 planReview() 的結果跑。
+ * burst  —— 連續觸發中，兩階段只跑階段一，省下的完整審查記帳等 settle 補。
+ * settle —— 補上 burst 期間省略掉的完整審查。單一請求，不重跑階段一。
+ */
+type ReviewMode = "normal" | "burst" | "settle";
+
 interface Settings {
   enabled: boolean;
+  debounceMs: number;
   endpoint: string;
   model: string;
   rulesPath: string;
@@ -34,6 +43,7 @@ function readSettings(): Settings {
     endpoint: c.get("endpoint", "http://127.0.0.1:3456"),
     model: c.get("model", "claude-opus-5"),
     rulesPath: c.get("rulesPath", ""),
+    debounceMs: c.get("debounceMs", 1000),
     includeDepth: c.get("includeDepth", 2),
     contextBudgetBytes: c.get("contextBudgetBytes", 120000),
     requestTimeoutMs: c.get("requestTimeoutMs", 120000),
@@ -60,7 +70,13 @@ class Controller {
     onCoalesce: (key) =>
       this.output.appendLine(`[review] ${path.basename(key)} 還在審查中，這次觸發併入下一輪。`),
     onRerun: (key) => this.output.appendLine(`[review] 用最新內容補跑 ${path.basename(key)}。`),
+    // 連續觸發停下來了：把 burst 期間省略掉的完整審查補回來。
+    onSettled: (key) => this.settleFullReview(key),
   });
+  private readonly debouncer = new Debouncer();
+  /** burst 期間降級成「只看改動處」的檔案。安靜下來要補一次完整審查。 */
+  private readonly owedFullReview = new Set<string>();
+  private readonly documents = new Map<string, vscode.TextDocument>();
   private lastSource = new Map<string, string>();
 
   constructor(
@@ -109,14 +125,59 @@ class Controller {
    */
   async review(document: vscode.TextDocument, trigger: ReviewTrigger = "manual"): Promise<void> {
     const filePath = document.uri.fsPath;
+    this.documents.set(filePath, document);
     // 補跑時 document 是同一個物件參考，getText() 讀到的一定是當下最新的內容。
-    await this.saves.run(filePath, trigger, (t) => this.runReview(document, t, filePath));
+    await this.saves.run(filePath, trigger, (t, info) =>
+      this.runReview(document, t, filePath, info.rerun ? "burst" : "normal"),
+    );
+  }
+
+  /**
+   * 存檔觸發的入口。等使用者安靜下來才真的送出。
+   *
+   * 存檔事件很密集（自動存檔預設 1 秒一次），而打到一半的程式碼審了也只是製造
+   * 雜訊、而且審完就過期。手動的 Review Current File 不走這裡，一律立即執行。
+   */
+  reviewOnSave(document: vscode.TextDocument): void {
+    const filePath = document.uri.fsPath;
+    const delay = readSettings().debounceMs;
+    if (delay <= 0) {
+      void this.review(document, "save");
+      return;
+    }
+    this.debouncer.schedule(filePath, delay, () => void this.review(document, "save"));
+  }
+
+  /** 手動觸發：取消還在等的去抖動，避免緊接著又補送一次存檔審查。 */
+  reviewNow(document: vscode.TextDocument): void {
+    this.debouncer.cancel(document.uri.fsPath);
+    void this.review(document, "manual");
+  }
+
+  /**
+   * 連續觸發期間只跑了階段一，這裡把完整審查補回來。
+   *
+   * 由 SingleFlight 在佇列排空、名額還沒放開時呼叫，所以這次完整審查
+   * 不會跟別的審查並行；期間新進來的存檔仍然會被接住併入下一輪。
+   */
+  private async settleFullReview(filePath: string): Promise<void> {
+    if (!this.owedFullReview.delete(filePath)) {
+      return;
+    }
+    const document = this.documents.get(filePath);
+    if (!document) {
+      return;
+    }
+    this.output.appendLine(`[review] 連續存檔停止，補做 ${path.basename(filePath)} 的完整審查。`);
+    // 直接呼叫 runReview，不要再走 saves.run —— 名額還握在手上，會卡死。
+    await this.runReview(document, "manual", filePath, "settle");
   }
 
   private async runReview(
     document: vscode.TextDocument,
     trigger: ReviewTrigger,
     filePath: string,
+    mode: ReviewMode,
   ): Promise<void> {
     const root = this.workspaceRoot;
     if (!root) {
@@ -217,7 +278,7 @@ class Controller {
     const publish = (
       findings: Finding[],
       dropped: DroppedFinding[],
-      stage: "changed" | "full" | undefined,
+      stage: "changed" | "changed-only" | "full" | undefined,
     ) => {
       // 不因為過期就把結果丟掉 —— 審查期間繼續打字是常態，丟掉的話意見會經常
       // 完全不出現。改成照常顯示但標記出來，讓使用者知道行號可能已經偏移。
@@ -250,7 +311,27 @@ class Controller {
       let kept: Finding[];
       let dropped: DroppedFinding[];
 
-      if (plan.kind === "two-stage") {
+      // settle 是「把 burst 期間省略掉的那半邊補回來」，只需要階段二 ——
+      // 階段一的意見在 burst 期間已經送過了，再跑一次只是重複付錢。
+      if (plan.kind === "two-stage" && mode === "burst") {
+        // 連續觸發中：只跑階段一。兩階段送的是**同一份完整檔案內容**
+        // （階段一只是多一段範圍指示），所以省掉階段二等於省一半請求。
+        //
+        // 但階段一會把改動範圍外的意見濾掉，而 DMA cache、W1C、ISR、ABI
+        // 這類問題本來就常常不在改動的那幾行上。所以這是延後、不是放棄 ——
+        // 欠的完整審查記在 owedFullReview，等安靜下來由 settleFullReview() 補。
+        const changed = plan.changed;
+        this.owedFullReview.add(filePath);
+        this.output.appendLine(
+          `[review] 連續存檔中，只審第 ${describeRanges(changed)} 行；` +
+            "完整審查等停下來再做。",
+        );
+        const raw = await requestReview(ctx, rules, { ...clientOpts, changed });
+        const r = filterFindings(raw, source, isMuted, changed);
+        logDropped(r.dropped);
+        kept = r.kept;
+        dropped = r.dropped;
+      } else if (plan.kind === "two-stage" && mode === "normal") {
         // 兩階段並行：階段一只看剛改的行，會先回來；階段二審整份檔案。
         // 並行而不是依序，總等待時間才不會是兩者相加。
         const changed = plan.changed;
@@ -306,7 +387,15 @@ class Controller {
       }
 
       const durationMs = Date.now() - started;
-      publish(kept, dropped, plan.kind === "two-stage" ? "full" : undefined);
+      publish(
+        kept,
+        dropped,
+        plan.kind !== "two-stage" && mode !== "settle"
+          ? undefined
+          : mode === "burst"
+            ? "changed-only"
+            : "full",
+      );
 
       appendAudit(root, this.config, {
         ts: new Date().toISOString(),
@@ -457,6 +546,10 @@ class Controller {
     void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆本機靜音。`);
   }
 
+  dispose(): void {
+    this.debouncer.dispose();
+  }
+
   jumpTo(line: number): void {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -492,11 +585,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     status,
+    { dispose: () => controller.dispose() },
     vscode.window.registerWebviewViewProvider(FindingsPanel.viewId, panel),
 
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (readSettings().enabled) {
-        void controller.review(doc, "save");
+        controller.reviewOnSave(doc);
       }
     }),
 
@@ -504,7 +598,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) {
         panel.reveal();
-        void controller.review(doc, "manual");
+        controller.reviewNow(doc);
       }
     }),
     vscode.commands.registerCommand("sensai.showPanel", () => panel.reveal()),

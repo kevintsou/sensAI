@@ -99,6 +99,11 @@
           "default": true,
           "description": "在存檔時自動審查 C 與組語檔案。"
         },
+        "sensai.debounceMs": {
+          "type": "number",
+          "default": 1000,
+          "markdownDescription": "存檔後等待多久（毫秒）沒有新的存檔才送出審查。避免連續存檔一直送出重複請求。設 0 代表存檔立即審查。`sensAI: Review Current File` 不受影響。"
+        },
         "sensai.endpoint": {
           "type": "string",
           "default": "http://127.0.0.1:3456",

@@ -15,6 +15,20 @@ export interface SingleFlightHooks<T> {
   onCoalesce?: (key: string) => void;
   /** 補跑開始前呼叫。 */
   onRerun?: (key: string) => void;
+  /**
+   * 待補跑的佇列排空、這一輪即將結束前呼叫，名額**還沒放開**。
+   *
+   * 給呼叫端一個「安靜下來了」的鉤子：burst 期間可以先跑便宜的版本，
+   * 等這裡再把完整的補回來。在這裡面排進去的新工作仍然會被接住，
+   * 不會變成並行。
+   */
+  onSettled?: (key: string) => void | Promise<void>;
+}
+
+/** 傳給 task 的這一輪資訊。 */
+export interface RunInfo {
+  /** true 代表這輪是把期間累積的觸發補跑，不是原本那一輪。 */
+  rerun: boolean;
 }
 
 export type RunOutcome = "ran" | "coalesced";
@@ -31,7 +45,11 @@ export class SingleFlight<T> {
    * 回 "coalesced" 代表這次沒有自己跑，已經記成待補跑；
    * 回 "ran" 代表這次跑完了，而且把期間累積的補跑也一併跑完。
    */
-  async run(key: string, value: T, task: (value: T) => Promise<void>): Promise<RunOutcome> {
+  async run(
+    key: string,
+    value: T,
+    task: (value: T, info: RunInfo) => Promise<void>,
+  ): Promise<RunOutcome> {
     if (this.inFlight.has(key)) {
       this.pending.set(key, this.hooks.merge(this.pending.get(key), value));
       this.hooks.onCoalesce?.(key);
@@ -43,17 +61,25 @@ export class SingleFlight<T> {
     this.inFlight.add(key);
     try {
       let current = value;
+      let rerun = false;
       for (;;) {
-        await task(current);
-        const next = this.pending.get(key);
+        await task(current, { rerun });
+        let next = this.pending.get(key);
         if (next === undefined) {
-          break;
+          // 排空了。onSettled 仍在名額內執行，它自己可能又排進新的工作，
+          // 所以要再看一次才能真的收工。
+          await this.hooks.onSettled?.(key);
+          next = this.pending.get(key);
+          if (next === undefined) {
+            break;
+          }
         }
         // 補跑期間 inFlight 不放開 —— 放開的話，這個空隙進來的觸發
         // 會被當成沒人在跑，變成並行。
         this.pending.delete(key);
         this.hooks.onRerun?.(key);
         current = next;
+        rerun = true;
       }
     } finally {
       this.inFlight.delete(key);

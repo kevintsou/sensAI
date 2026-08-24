@@ -13,6 +13,7 @@ import {
 } from "../out/filter.js";
 import { mergeRanges, parseDiffRanges, planReview } from "../out/diff.js";
 import { SingleFlight } from "../out/singleflight.js";
+import { Debouncer } from "../out/debounce.js";
 import { normalizeRuleId } from "../out/review.js";
 import { loadRules, rulesPath } from "../out/rules.js";
 import { buildUserMessage, systemPrompt } from "../out/prompt.js";
@@ -400,6 +401,124 @@ test("組語的 prompt 用 asm 圍籬與對應的措辭", () => {
 });
 
 // ---------------------------------------------------------------- 兩階段
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("去抖動：連續存檔只會送出最後一次", async () => {
+  const d = new Debouncer();
+  const fired = [];
+  for (const v of ["v1", "v2", "v3"]) {
+    d.schedule("a.c", 30, () => fired.push(v));
+    await sleep(5);
+  }
+  await sleep(60);
+  assert.deepEqual(fired, ["v3"]);
+});
+
+test("去抖動：安靜期滿才觸發，不是到時間就觸發", async () => {
+  const d = new Debouncer();
+  let fired = 0;
+  d.schedule("a.c", 40, () => fired++);
+  await sleep(25);
+  d.schedule("a.c", 40, () => fired++); // 重新計時
+  await sleep(25);
+  assert.equal(fired, 0, "第一次的 40ms 已過，但中途被重設，不該觸發");
+  await sleep(30);
+  assert.equal(fired, 1);
+});
+
+test("去抖動：不同檔案各自計時，互不影響", async () => {
+  const d = new Debouncer();
+  const fired = [];
+  d.schedule("a.c", 20, () => fired.push("a"));
+  d.schedule("b.c", 20, () => fired.push("b"));
+  await sleep(50);
+  assert.deepEqual(fired.sort(), ["a", "b"]);
+});
+
+test("去抖動：cancel 之後不會再觸發（手動審查搶先時用）", async () => {
+  const d = new Debouncer();
+  let fired = 0;
+  d.schedule("a.c", 20, () => fired++);
+  d.cancel("a.c");
+  assert.equal(d.isPending("a.c"), false);
+  await sleep(40);
+  assert.equal(fired, 0);
+});
+
+test("補跑那一輪會被標記為 rerun，原本那輪不會", async () => {
+  const flight = saveFlight();
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+
+  const first = flight.run("a.c", "save", async (v, info) => {
+    seen.push(info.rerun);
+    if (seen.length === 1) await gate;
+  });
+  await tick();
+  await flight.run("a.c", "save", async () => {});
+  release();
+  await first;
+
+  assert.deepEqual(seen, [false, true]);
+});
+
+test("佇列排空時呼叫 onSettled，補完整審查就掛在這裡", async () => {
+  const order = [];
+  const flight = new SingleFlight({
+    merge: (existing, incoming) =>
+      incoming === "manual" || existing === undefined ? incoming : existing,
+    onSettled: async () => order.push("settled"),
+  });
+
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const first = flight.run("a.c", "save", async (_v, info) => {
+    order.push(info.rerun ? "rerun" : "run");
+    if (order.length === 1) await gate;
+  });
+  await tick();
+  await flight.run("a.c", "save", async () => {});
+  release();
+  await first;
+
+  // 補跑跑完才 settle，而且只 settle 一次。
+  assert.deepEqual(order, ["run", "rerun", "settled"]);
+});
+
+test("onSettled 期間進來的觸發會被接住，不會並行也不會漏掉", async () => {
+  const order = [];
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let settled = 0;
+  let flight;
+
+  flight = new SingleFlight({
+    merge: (existing, incoming) => incoming ?? existing,
+    onSettled: async () => {
+      settled++;
+      if (settled === 1) {
+        // 模擬「補完整審查的期間，使用者又存了一次檔」
+        void flight.run("a.c", "save", task);
+      }
+      order.push("settled");
+    },
+  });
+
+  const task = async () => {
+    concurrent++;
+    maxConcurrent = Math.max(maxConcurrent, concurrent);
+    order.push("run");
+    await tick();
+    concurrent--;
+  };
+
+  await flight.run("a.c", "save", task);
+  assert.equal(maxConcurrent, 1, "settle 期間排進來的工作不可以跟別的並行");
+  assert.deepEqual(order, ["run", "settled", "run", "settled"]);
+  assert.equal(flight.isInFlight("a.c"), false);
+});
 
 /** merge 規則與 Controller 用的那份相同：manual 蓋過 save，反過來不蓋。 */
 function saveFlight(log = []) {

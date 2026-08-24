@@ -18,7 +18,8 @@ similar hardware conventions.
 
 - Reviews `.c`, `.h`, `.s`, and `.S` files on save or on demand.
 - Skips a save with no changes; an on-demand review always runs.
-- Coalesces saves that arrive mid-review into one re-run on the latest content.
+- Waits for a quiet period before sending, and coalesces saves that arrive
+  mid-review into one re-run on the latest content.
 - Resolves project-local includes and injects ABI facts for assembly reviews.
 - Uses natural-language rules maintained in version control.
 - Requires source-grounded evidence and drops fabricated references.
@@ -67,6 +68,7 @@ enabling reviews on confidential firmware repositories.
 | Setting | Default | Purpose |
 |---|---:|---|
 | `sensai.enabled` | `true` | Review supported files on save. |
+| `sensai.debounceMs` | `1000` | Quiet period after a save before the review is sent; `0` sends immediately. |
 | `sensai.endpoint` | `http://127.0.0.1:3456` | Router endpoint. |
 | `sensai.model` | `claude-opus-5` | Router model key. |
 | `sensai.rulesPath` | empty | A rules file; relative paths use the workspace root. |
@@ -130,10 +132,21 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 
 ### 頻繁存檔
 
-同一個檔案同時只會有一輪審查。這輪還在跑時進來的存檔會**併成一次補跑**（不是丟掉，
-也不是各跑一輪），補跑用的是當下最新的檔案內容。所以連按存檔、或邊打字邊自動存檔，
-都會塌縮成「現在這輪 + 最後補跑一次」，請求數不隨存檔次數線性增加，而最後一次存檔的
-內容保證會被審到。
+三層機制避免重複的請求一直被送出：
+
+1. **去抖動**：存檔後等 `sensai.debounceMs`（預設 1000ms）沒有新的存檔才真的送出。
+   持續打字期間幾乎不會送出任何請求 —— 只審已經穩定下來的內容。設 0 可關閉。
+2. **合併**：同一個檔案同時只跑一輪。這輪還在跑時進來的存檔併成**一次**補跑（不是
+   丟掉，也不是各跑一輪），用當下最新的內容。最後一次存檔的內容保證會被審到。
+3. **連續觸發時降級**：補跑那幾輪只做階段一（只看改動的行）。兩階段送的是同一份
+   完整檔案，省掉階段二等於省一半請求。
+
+第 3 點是**延後、不是放棄**。階段一會濾掉改動範圍外的意見，而 DMA cache、W1C、ISR、
+ABI 這類問題常常不在改動的那幾行上。所以連續觸發一停止，sensAI 會自動補做完整審查
+（單一請求，不重跑階段一）。側欄在降級期間會標示「連續存檔中，等停下來再做完整審查」。
+
+`sensAI: Review Current File` 不受這三層影響，一律立即執行完整流程，並取消該檔案還在
+等待的去抖動。
 
 審查期間檔案又被改過時，結果仍然會顯示，但側欄會標明行號是對著送出當下那一版算的、
 跳行可能會偏。
