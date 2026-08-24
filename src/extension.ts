@@ -5,7 +5,13 @@ import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext } from "./context";
 import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
-import { applySeverityBudget, filterFindings, mergeStageFindings } from "./filter";
+import {
+  CarriedFindings,
+  applySeverityBudget,
+  carryOverFindings,
+  filterFindings,
+  mergeStageFindings,
+} from "./filter";
 import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
 import { FindingsPanel } from "./panel";
@@ -76,6 +82,14 @@ class Controller {
   private readonly debouncer = new Debouncer();
   /** burst 期間降級成「只看改動處」的檔案。安靜下來要補一次完整審查。 */
   private readonly owedFullReview = new Set<string>();
+  /**
+   * burst 期間階段一的意見，等補做完整審查時合併回來。
+   *
+   * 補做只跑階段二，發佈時會整個取代面板 —— 不留著的話，burst 期間落在改動行上
+   * 的意見就消失了。只保留最後一輪：burst 的改動範圍是相對 HEAD 累積的，
+   * 後一輪涵蓋前一輪，舊的留著只會是過期的行號。
+   */
+  private readonly burstFindings = new Map<string, CarriedFindings>();
   private readonly documents = new Map<string, vscode.TextDocument>();
   private lastSource = new Map<string, string>();
 
@@ -331,6 +345,8 @@ class Controller {
         logDropped(r.dropped);
         kept = r.kept;
         dropped = r.dropped;
+        // 連同當時的內容一起存 —— 行號是對著這一版算的，補做時要比對。
+        this.burstFindings.set(filePath, { findings: kept, dropped, source });
       } else if (plan.kind === "two-stage" && mode === "normal") {
         // 兩階段並行：階段一只看剛改的行，會先回來；階段二審整份檔案。
         // 並行而不是依序，總等待時間才不會是兩者相加。
@@ -384,6 +400,27 @@ class Controller {
         logDropped(r.dropped);
         kept = r.kept;
         dropped = r.dropped;
+      }
+
+      if (mode === "settle") {
+        const carried = this.burstFindings.get(filePath);
+        this.burstFindings.delete(filePath);
+        const out = carryOverFindings(carried, { findings: kept, dropped, source });
+        if (out.merged) {
+          this.output.appendLine(
+            `[review] 併回 burst 期間的 ${carried!.findings.length} 則意見` +
+              (out.duplicates > 0 ? `，其中 ${out.duplicates} 則與完整審查重複` : ""),
+          );
+        } else if (carried) {
+          this.output.appendLine(
+            "[review] 檔案在補做完整審查前又被改過，burst 期間的意見行號已過期，不併回。",
+          );
+        }
+        kept = out.findings;
+        dropped = out.dropped;
+      } else if (mode === "normal") {
+        // 完整的兩階段已經自己涵蓋了改動處，先前 burst 的殘留就過期了。
+        this.burstFindings.delete(filePath);
       }
 
       const durationMs = Date.now() - started;

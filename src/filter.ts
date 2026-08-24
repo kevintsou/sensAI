@@ -168,6 +168,46 @@ export function findingIdentity(f: Finding, lineText: string): string {
  * 重複的部分保留 primary（階段一）的版本 —— 那是落在你剛改的行上的意見，
  * 對當下的你比較有用，而且它先到，換掉會讓面板上的文字莫名其妙跳動。
  */
+/** burst 期間階段一的結果，等安靜下來合併回完整審查。 */
+export interface CarriedFindings {
+  findings: Finding[];
+  dropped: DroppedFinding[];
+  /** 產生這些意見時的檔案內容。行號是對著這一版算的。 */
+  source: string;
+}
+
+/**
+ * 把 burst 期間只跑階段一得到的意見，合併進事後補做的完整審查。
+ *
+ * 補做的完整審查只跑階段二，發佈時會整個取代面板 —— 不合併的話，burst 期間
+ * 落在改動行上的意見就這樣消失了。兩個階段的結果本來就不是互相包含的關係，
+ * 否則 mergeStageFindings() 根本不需要存在。
+ *
+ * 只有在檔案內容一模一樣時才合併：帶過來的行號是對著當時那一版算的，內容變了
+ * 就會混到兩個版本的行號。那種情況下這些意見本來也已經過期，丟掉才是對的。
+ */
+export function carryOverFindings(
+  carried: CarriedFindings | undefined,
+  current: { findings: Finding[]; dropped: DroppedFinding[]; source: string },
+): { findings: Finding[]; dropped: DroppedFinding[]; merged: boolean; duplicates: number } {
+  if (carried === undefined || carried.source !== current.source) {
+    return { findings: current.findings, dropped: current.dropped, merged: false, duplicates: 0 };
+  }
+  // primary 用 burst 那批，跟 mergeStageFindings() 的取捨一致 ——
+  // 落在剛改的行上的說法對當下的作者比較有用。
+  const { merged, duplicates } = mergeStageFindings(
+    carried.findings,
+    current.findings,
+    current.source,
+  );
+  return {
+    findings: merged,
+    dropped: [...carried.dropped, ...current.dropped],
+    merged: true,
+    duplicates,
+  };
+}
+
 export function mergeStageFindings(
   primary: Finding[],
   secondary: Finding[],

@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { buildContext } from "../out/context.js";
 import {
   applySeverityBudget,
+  carryOverFindings,
   evidenceIsGrounded,
   filterFindings,
   mergeStageFindings,
@@ -646,6 +647,96 @@ test("工作丟例外也要放開 inFlight，否則該檔案永遠不會再被�
     ran = true;
   });
   assert.equal(ran, true);
+});
+
+const SRC = "void f(void) {\n  UART0->STATUS |= 1;\n  dma_start();\n}\n";
+
+function mkFinding(line, message, ruleId = null) {
+  return {
+    line,
+    severity: "error",
+    message,
+    trigger_condition: "t",
+    consequence: "c",
+    evidence: "e",
+    rule_id: ruleId,
+  };
+}
+
+test("補做完整審查時，burst 期間的意見會被併回來，不是被覆蓋", () => {
+  const carried = {
+    findings: [mkFinding(2, "W1C 不能用 |=", "w1c")],
+    dropped: [],
+    source: SRC,
+  };
+  const out = carryOverFindings(carried, {
+    findings: [mkFinding(3, "DMA 前沒有 clean cache", "dma")],
+    dropped: [],
+    source: SRC,
+  });
+
+  assert.equal(out.merged, true);
+  assert.deepEqual(
+    out.findings.map((f) => f.rule_id),
+    ["w1c", "dma"],
+  );
+});
+
+test("兩邊重複的意見只留一則，且保留 burst 那一版的說法", () => {
+  const carried = {
+    findings: [mkFinding(2, "burst 的說法", "w1c")],
+    dropped: [],
+    source: SRC,
+  };
+  const out = carryOverFindings(carried, {
+    findings: [mkFinding(2, "完整審查的說法", "w1c")],
+    dropped: [],
+    source: SRC,
+  });
+
+  assert.equal(out.duplicates, 1);
+  assert.equal(out.findings.length, 1);
+  assert.equal(out.findings[0].message, "burst 的說法");
+});
+
+test("檔案在補做前又被改過，burst 的意見不併回（行號已對不上）", () => {
+  const carried = {
+    findings: [mkFinding(2, "W1C 不能用 |=", "w1c")],
+    dropped: [],
+    source: SRC,
+  };
+  const out = carryOverFindings(carried, {
+    findings: [mkFinding(3, "DMA 前沒有 clean cache", "dma")],
+    dropped: [],
+    source: SRC.replace("void f", "void f2"), // 內容變了
+  });
+
+  assert.equal(out.merged, false);
+  assert.deepEqual(
+    out.findings.map((f) => f.rule_id),
+    ["dma"],
+  );
+});
+
+test("沒有 burst 殘留時，完整審查的結果原樣通過", () => {
+  const current = { findings: [mkFinding(3, "x", "dma")], dropped: [], source: SRC };
+  const out = carryOverFindings(undefined, current);
+  assert.equal(out.merged, false);
+  assert.deepEqual(out.findings, current.findings);
+});
+
+test("被濾除的紀錄兩邊都保留，診斷才看得到全貌", () => {
+  const carried = {
+    findings: [],
+    dropped: [{ finding: mkFinding(9, "burst 濾除"), reason: "line-out-of-range" }],
+    source: SRC,
+  };
+  const out = carryOverFindings(carried, {
+    findings: [],
+    dropped: [{ finding: mkFinding(9, "完整審查濾除"), reason: "evidence-not-found" }],
+    source: SRC,
+  });
+  assert.equal(out.dropped.length, 2);
 });
 
 test("存檔且有改動，才走兩階段", () => {
