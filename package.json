@@ -144,6 +144,11 @@
           "type": "number",
           "default": 8,
           "description": "面板上最多直接顯示幾則意見。超過的話，較低嚴重度的會收合到「另有 N 則」裡（error 永遠不收）。設 0 表示不限制。"
+        },
+        "sensai.reviewWholeFile": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "預設審查範圍是「改動的行」加上「改動所在的函式」。開啟後，額外再審**整份檔案**，能抓到不在改動函式裡的問題（例如別處的宣告、跨函式的慣例），代價是多送一次請求、較慢也較耗 token。"
         }
       }
     }

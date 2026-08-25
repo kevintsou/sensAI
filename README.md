@@ -80,6 +80,7 @@ enabling reviews on confidential firmware repositories.
 | `sensai.contextBudgetBytes` | `120000` | Header-context byte limit. |
 | `sensai.requestTimeoutMs` | `120000` | Per-review timeout in milliseconds. |
 | `sensai.maxFindings` | `8` | Finding cap; lower severities collapse first, `error` never collapses. |
+| `sensai.reviewWholeFile` | `false` | By default the review covers the changed lines plus the function they sit in. Enable to also review the whole file (catches issues outside the changed function, at the cost of a larger request). |
 
 ## 繁體中文
 

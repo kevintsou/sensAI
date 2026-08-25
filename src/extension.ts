@@ -5,6 +5,7 @@ import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext, realFileAccess, CachingFileAccess, isInSkippedDir } from "./context";
 import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
+import { expandToEnclosingFunction } from "./funcscope";
 import {
   CarriedFindings,
   applySeverityBudget,
@@ -42,6 +43,7 @@ interface Settings {
   contextBudgetBytes: number;
   requestTimeoutMs: number;
   maxFindings: number;
+  reviewWholeFile: boolean;
 }
 
 function readSettings(): Settings {
@@ -57,6 +59,7 @@ function readSettings(): Settings {
     contextBudgetBytes: c.get("contextBudgetBytes", 120000),
     requestTimeoutMs: c.get("requestTimeoutMs", 120000),
     maxFindings: c.get("maxFindings", 8),
+    reviewWholeFile: c.get("reviewWholeFile", false),
   };
 }
 
@@ -409,14 +412,25 @@ class Controller {
         // 連同當時的內容一起存 —— 行號是對著這一版算的，補做時要比對。
         this.burstFindings.set(filePath, { findings: kept, dropped, source });
       } else if (plan.kind === "two-stage" && mode === "normal") {
-        // 兩階段並行：階段一只看剛改的行，會先回來；階段二審整份檔案。
+        // 兩階段並行：階段一只看剛改的行，會先回來；階段二是「完整審查」那一段。
         // 並行而不是依序，總等待時間才不會是兩者相加。
+        //
+        // 階段二的範圍：預設是「改動所在的函式」（比整份小、較快、較省 token）；
+        // 開了 sensai.reviewWholeFile 就擴大成整份檔案。函式是整份的子集，所以
+        // 兩者擇一即可，不會同時送、不重疊。
         const changed = plan.changed;
+        const wholeFile = settings.reviewWholeFile;
+        // 拓不出函式邊界時 expandToEnclosingFunction 會保留原改動行，等於退回
+        // 只看改動行 —— 保守，不會把半個檔案誤當函式。
+        const secondScope = wholeFile ? null : expandToEnclosingFunction(source, changed);
         this.output.appendLine(
-          `[review] 兩階段：階段一只看第 ${describeRanges(changed)} 行，階段二審整份檔案`,
+          `[review] 兩階段：階段一只看第 ${describeRanges(changed)} 行，階段二審` +
+            (wholeFile
+              ? "整份檔案（sensai.reviewWholeFile）"
+              : `改動所在的函式（第 ${describeRanges(secondScope!)} 行）`),
         );
         const stage1 = requestReview(ctx, rules, { ...clientOpts, changed });
-        const stage2 = requestReview(ctx, rules, clientOpts);
+        const stage2 = requestReview(ctx, rules, { ...clientOpts, changed: secondScope });
 
         // 階段一先到就先顯示，不等階段二。
         const first = stage1.then((raw) => {
@@ -446,7 +460,8 @@ class Controller {
           kept = changedResult.kept;
           dropped = changedResult.dropped;
         } else {
-          const full = filterFindings(r2.value, source, isMuted);
+          // 階段二的範圍限制跟送出去的一致：整份不限範圍，函式則限在函式行內。
+          const full = filterFindings(r2.value, source, isMuted, secondScope);
           logDropped(full.dropped);
           const { merged, duplicates } = mergeStageFindings(changedResult.kept, full.kept, source);
           if (duplicates > 0) {
@@ -455,7 +470,24 @@ class Controller {
           kept = merged;
           dropped = [...changedResult.dropped, ...full.dropped];
         }
+      } else if (plan.kind === "two-stage" && mode === "settle") {
+        // burst 停下後補做「完整審查那一段」。範圍跟 normal 的階段二一致：
+        // 預設函式、開了 reviewWholeFile 才整份。階段一在 burst 期間已送過。
+        const secondScope = settings.reviewWholeFile
+          ? null
+          : expandToEnclosingFunction(source, plan.changed);
+        this.output.appendLine(
+          `[review] 補做完整審查：${
+            settings.reviewWholeFile ? "整份檔案" : `改動所在的函式（第 ${describeRanges(secondScope!)} 行）`
+          }`,
+        );
+        const raw = await requestReview(ctx, rules, { ...clientOpts, changed: secondScope });
+        const r = filterFindings(raw, source, isMuted, secondScope);
+        logDropped(r.dropped);
+        kept = r.kept;
+        dropped = r.dropped;
       } else {
+        // full plan（未追蹤／非 git／手動審沒改動）：沒有改動範圍可算函式，審整份。
         const raw = await requestReview(ctx, rules, clientOpts);
         const r = filterFindings(raw, source, isMuted);
         logDropped(r.dropped);

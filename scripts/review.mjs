@@ -18,6 +18,7 @@ import { loadProjectConfig } from "../out/config.js";
 import { buildContext } from "../out/context.js";
 import { filterFindings, mergeStageFindings } from "../out/filter.js";
 import { changedRanges, describeRanges, gitCwd, planReview } from "../out/diff.js";
+import { expandToEnclosingFunction } from "../out/funcscope.js";
 import { detectLanguage, LANGUAGE_LABEL } from "../out/language.js";
 import { blockedPaths } from "../out/privacy.js";
 import { requestReview, EndpointUnavailableError } from "../out/review.js";
@@ -54,6 +55,7 @@ function parseArgs(argv) {
     else if (a === "--json") opts.json = true;
     else if (a === "--show-prompt") opts.showPrompt = true;
     else if (a === "--staged") opts.staged = true;
+    else if (a === "--whole-file") opts.wholeFile = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else if (!a.startsWith("-")) opts.file = a;
   }
@@ -69,8 +71,9 @@ const USAGE = `用法：npm run review -- <檔案> [選項]
                      省略時讀環境變數 ANTHROPIC_API_KEY，再退回佔位字串
   --arch <id>        覆寫 assembly.arch（riscv32-andes-v5 / armv7e-m）
   --root <dir>       專案根目錄。省略時從檔案往上找含 .sensai/ 的目錄
-  --staged           走與擴充相同的兩階段流程（改動處 + 整份，最後去重）。
-                     檔案相對 HEAD 沒有改動時退回單階段整份審查
+  --staged           走與擴充相同的兩階段流程：階段一看改動處，階段二看
+                     改動所在的函式，最後去重。相對 HEAD 沒有改動時退回單階段
+  --whole-file       搭配 --staged：階段二改成審整份檔案，不只改動的函式
   --show-prompt      印出實際送出的 prompt 就結束，不呼叫 CCR
   --json             輸出 JSON，方便串接
 `;
@@ -202,12 +205,14 @@ async function main() {
         archId: opts.arch ?? config.assemblyArch,
         onUnknownRuleId: warnUnknownRuleId,
       };
+      // 階段二範圍：預設改動所在的函式，--whole-file 才整份。跟擴充一致。
+      const secondScope = opts.wholeFile ? null : expandToEnclosingFunction(source, changed);
       const [rawChanged, rawFull] = await Promise.all([
         requestReview(ctx, rules, { ...clientOpts, changed }),
-        requestReview(ctx, rules, clientOpts),
+        requestReview(ctx, rules, { ...clientOpts, changed: secondScope }),
       ]);
       const one = filterFindings(rawChanged, source, () => false, changed);
-      const two = filterFindings(rawFull, source, () => false);
+      const two = filterFindings(rawFull, source, () => false, secondScope);
       const { merged, duplicates } = mergeStageFindings(one.kept, two.kept, source);
       stagedSummary = {
         stage1: one.kept.length,

@@ -4,6 +4,10 @@ All notable changes to sensAI are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- The default review scope is smaller. The second stage used to review the whole file; it now reviews only the function the change sits in, found by a brace-matching heuristic (`src/funcscope.ts`). Stage one still reports on the changed lines first. Scoping to the function is faster and cheaper and keeps findings close to the edit; a change outside any function (a global declaration, a macro) falls back to the changed lines. Set the new `sensai.reviewWholeFile` to restore whole-file review as the second stage. The CLI reviewer mirrors this: `--staged` scopes stage two to the function, `--whole-file` widens it back.
+
 ### Added
 
 - Cancel a running review from the panel. A "取消審查" button appears while a review is in flight (and an inline "取消" on the updating note when a previous result is kept on screen). It aborts the in-flight request for the current file -- both stages share one signal -- and clears any pending debounce so the cancel is not immediately followed by another save-triggered review. The panel returns to idle; a cancel is reported as cancelled, not as an error.

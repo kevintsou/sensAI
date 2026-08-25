@@ -13,6 +13,7 @@ import {
   mergeStageFindings,
 } from "../out/filter.js";
 import { mergeRanges, parseDiffRanges, planReview } from "../out/diff.js";
+import { expandToEnclosingFunction } from "../out/funcscope.js";
 import { SingleFlight } from "../out/singleflight.js";
 import { Debouncer } from "../out/debounce.js";
 import { normalizeRuleId } from "../out/review.js";
@@ -144,6 +145,79 @@ test("header 索引跨呼叫快取，直到 invalidateIndex 才重建", () => {
   assert.notStrictEqual(rebuilt, first);
   assert.equal(rebuilt.has("a.h"), true);
   assert.equal(rebuilt.has("b.h"), true);
+});
+
+const FUNC_SRC = [
+  "#include <stdint.h>",           // 1
+  "",                             // 2
+  "static uint32_t g_count = 0;", // 3  全域宣告（函式外）
+  "",                             // 4
+  "void foo(void)",               // 5  簽名
+  "{",                            // 6
+  "    g_count++;",               // 7
+  "    bar();",                   // 8
+  "}",                            // 9
+  "",                             // 10
+  "int baz(int x)",               // 11
+  "{",                            // 12
+  "    if (x) {",                 // 13
+  "        return 1;  // } 假的",  // 14
+  "    }",                        // 15
+  "    return 0;",                // 16
+  "}",                            // 17
+].join("\n");
+
+test("拓範圍：函式內改動拓到整個函式（含簽名行）", () => {
+  assert.deepEqual(expandToEnclosingFunction(FUNC_SRC, [{ start: 7, end: 7 }]), [
+    { start: 5, end: 9 },
+  ]);
+});
+
+test("拓範圍：巢狀大括號與註解裡假的 } 不干擾", () => {
+  assert.deepEqual(expandToEnclosingFunction(FUNC_SRC, [{ start: 14, end: 14 }]), [
+    { start: 11, end: 17 },
+  ]);
+});
+
+test("拓範圍：改動在函式外（全域宣告）保留原行", () => {
+  assert.deepEqual(expandToEnclosingFunction(FUNC_SRC, [{ start: 3, end: 3 }]), [
+    { start: 3, end: 3 },
+  ]);
+});
+
+test("拓範圍：多段改動各自拓寬", () => {
+  assert.deepEqual(
+    expandToEnclosingFunction(FUNC_SRC, [
+      { start: 7, end: 7 },
+      { start: 14, end: 14 },
+    ]),
+    [
+      { start: 5, end: 9 },
+      { start: 11, end: 17 },
+    ],
+  );
+});
+
+test("拓範圍：橫跨函式的改動聯集兩邊", () => {
+  // 從 foo 內一路改到 baz 內 —— 兩個函式都要納入。
+  assert.deepEqual(expandToEnclosingFunction(FUNC_SRC, [{ start: 8, end: 13 }]), [
+    { start: 5, end: 17 },
+  ]);
+});
+
+test("拓範圍：字串常數裡的大括號不影響配對", () => {
+  const src = [
+    "void f(void)",       // 1
+    "{",                  // 2
+    '    log("{oops}");', // 3
+    "    x++;",           // 4
+    "}",                  // 5
+  ].join("\n");
+  assert.deepEqual(expandToEnclosingFunction(src, [{ start: 4, end: 4 }]), [{ start: 1, end: 5 }]);
+});
+
+test("拓範圍：空改動回空", () => {
+  assert.deepEqual(expandToEnclosingFunction(FUNC_SRC, []), []);
 });
 
 test("isInSkippedDir：build 輸出目錄裡的 header 不該讓索引失效", () => {
