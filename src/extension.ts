@@ -3,7 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
-import { buildContext } from "./context";
+import { buildContext, realFileAccess, CachingFileAccess } from "./context";
 import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
 import {
   CarriedFindings,
@@ -94,6 +94,13 @@ class Controller {
   private readonly documents = new Map<string, vscode.TextDocument>();
   private lastSource = new Map<string, string>();
   private readonly pins: PinStore;
+  /**
+   * 跨 review 共用的檔案存取 + header 索引快取。索引是整棵樹的同步掃描，
+   * 每次 review 都重建會阻塞 extension host —— 所以留著這一份，只在 header
+   * 檔增刪時 invalidateIndex()。workspace root 變了才重建。
+   */
+  private fileAccess: CachingFileAccess | undefined;
+  private fileAccessRoot: string | undefined;
 
   constructor(
     private readonly panel: FindingsPanel,
@@ -107,6 +114,28 @@ class Controller {
 
   private get workspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  /** 取得跨 review 共用的 FileAccess；workspace root 換了就重建。 */
+  private getFileAccess(root: string): CachingFileAccess {
+    if (!this.fileAccess || this.fileAccessRoot !== root) {
+      this.fileAccess = realFileAccess(root);
+      this.fileAccessRoot = root;
+    }
+    return this.fileAccess;
+  }
+
+  /** header 檔增刪時呼叫，讓下次 review 重建索引。內容變動不需要（索引只認路徑）。 */
+  invalidateHeaderIndex(): void {
+    this.fileAccess?.invalidateIndex();
+  }
+
+  /** 檔案關閉時清掉它的快取，避免 documents/lastSource 隨開過的檔案數無限成長。 */
+  forgetDocument(filePath: string): void {
+    this.documents.delete(filePath);
+    this.lastSource.delete(filePath);
+    this.burstFindings.delete(filePath);
+    this.owedFullReview.delete(filePath);
   }
 
   reloadProjectFiles(notify = false): void {
@@ -216,12 +245,18 @@ class Controller {
     // 結果回來時行號是對著這一版算的，未必還對得上編輯器裡的內容。
     const sentVersion = document.version;
 
-    const ctx: ReviewContext = buildContext(filePath, source, {
-      workspaceRoot: root,
-      language,
-      depth: settings.includeDepth,
-      budgetBytes: settings.contextBudgetBytes,
-    });
+    const ctx: ReviewContext = buildContext(
+      filePath,
+      source,
+      {
+        workspaceRoot: root,
+        language,
+        depth: settings.includeDepth,
+        budgetBytes: settings.contextBudgetBytes,
+      },
+      // 共用實例，header 索引跨 review 快取，不要每次 review 重掃整棵樹。
+      this.getFileAccess(root),
+    );
 
     // 只送這個語言適用的規則。把 C 的規則送去審組語只會製造誤報。
     const rules = this.rules.filter((r) => r.languages.includes(language));
@@ -710,6 +745,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    // 檔案關閉就丟掉它的快取，否則 documents/lastSource 會隨開過的檔案數
+    // 無限成長 —— documents 還持有 TextDocument 強參考，擋住 GC。
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      controller.forgetDocument(doc.uri.fsPath);
+    }),
+
     vscode.commands.registerCommand("sensai.reviewCurrentFile", () => {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) {
@@ -735,9 +776,6 @@ export function activate(context: vscode.ExtensionContext): void {
       new vscode.RelativePattern(root, ".sensai/config.{yaml,yml}"),
     );
     const reload = () => controller.reloadProjectFiles();
-    configWatcher.onDidChange(reload);
-    configWatcher.onDidCreate(reload);
-    configWatcher.onDidDelete(reload);
 
     let rulesWatcher: vscode.FileSystemWatcher | undefined;
     const watchRulesFile = () => {
@@ -753,8 +791,21 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     watchRulesFile();
 
+    // header 檔增刪時讓 header 索引失效。索引只認「檔名 → 路徑」，所以內容變動
+    // （onDidChange）不影響，只需要理會新增與刪除。
+    const headerWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(root, "**/*.{h,hpp,hh,inc,s,S}"),
+    );
+    const invalidate = () => controller.invalidateHeaderIndex();
+
     context.subscriptions.push(
       configWatcher,
+      configWatcher.onDidChange(reload),
+      configWatcher.onDidCreate(reload),
+      configWatcher.onDidDelete(reload),
+      headerWatcher,
+      headerWatcher.onDidCreate(invalidate),
+      headerWatcher.onDidDelete(invalidate),
       { dispose: () => rulesWatcher?.dispose() },
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("sensai.rulesPath")) {

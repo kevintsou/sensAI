@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildContext } from "../out/context.js";
+import { buildContext, realFileAccess } from "../out/context.js";
 import {
   applySeverityBudget,
   carryOverFindings,
@@ -122,6 +122,28 @@ test("include 解析：超過位元組預算就標記截斷", () => {
   const ctx = buildContext("/proj/m.c", '#include "big.h"\n', { ...opts, budgetBytes: 100 }, fa);
   assert.equal(ctx.headers.length, 0);
   assert.equal(ctx.truncated, true);
+});
+
+test("header 索引跨呼叫快取，直到 invalidateIndex 才重建", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-idx-"));
+  fs.writeFileSync(path.join(dir, "a.h"), "#define A 1");
+  const fa = realFileAccess(dir);
+
+  const first = fa.headerIndex();
+  // 索引建好後，記憶體裡是同一個 Map 參考 —— 沒有每次都重掃整棵樹。
+  assert.strictEqual(fa.headerIndex(), first);
+
+  // 新增一個 header，但還沒 invalidate：舊索引不該看到它。
+  fs.writeFileSync(path.join(dir, "b.h"), "#define B 1");
+  assert.strictEqual(fa.headerIndex(), first);
+  assert.equal(first.has("b.h"), false);
+
+  // invalidate 後重建，才看得到新檔，而且是新的 Map。
+  fa.invalidateIndex();
+  const rebuilt = fa.headerIndex();
+  assert.notStrictEqual(rebuilt, first);
+  assert.equal(rebuilt.has("a.h"), true);
+  assert.equal(rebuilt.has("b.h"), true);
 });
 
 test("evidence 引用到原始碼裡存在的識別字才算數", () => {

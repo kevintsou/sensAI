@@ -33,7 +33,23 @@ export interface FileAccess {
   headerIndex(): Map<string, string[]>;
 }
 
-export function realFileAccess(workspaceRoot: string): FileAccess {
+/**
+ * 帶「失效」能力的 FileAccess。header 索引是走整棵樹的同步掃描，很貴 ——
+ * 一定要跨 review 快取，只在 header 檔案增刪時才重建。
+ */
+export interface CachingFileAccess extends FileAccess {
+  /** 丟掉快取的 header 索引，下次查詢時重建。header 檔增刪時呼叫。 */
+  invalidateIndex(): void;
+}
+
+/**
+ * 建立一個跨 review 共用的 FileAccess。
+ *
+ * 關鍵在於**這個實例要被留著重用**：header 索引 lazy-build 一次後就快取，
+ * 不要每次 review 都 new 一個新的（那會讓整棵樹的同步掃描每次存檔重跑，
+ * 阻塞 extension host）。索引的失效由呼叫端在 header 檔增刪時觸發。
+ */
+export function realFileAccess(workspaceRoot: string): CachingFileAccess {
   let index: Map<string, string[]> | null = null;
   return {
     exists: (p) => fs.existsSync(p),
@@ -43,6 +59,9 @@ export function realFileAccess(workspaceRoot: string): FileAccess {
         index = buildHeaderIndex(workspaceRoot);
       }
       return index;
+    },
+    invalidateIndex: () => {
+      index = null;
     },
   };
 }
