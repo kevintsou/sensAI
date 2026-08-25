@@ -2,16 +2,17 @@
 
 All notable changes to sensAI are documented in this file.
 
-## Unreleased
-
-### Changed
-
-- The default review scope is smaller. The second stage used to review the whole file; it now reviews only the function the change sits in, found by a brace-matching heuristic (`src/funcscope.ts`). Stage one still reports on the changed lines first. Scoping to the function is faster and cheaper and keeps findings close to the edit; a change outside any function (a global declaration, a macro) falls back to the changed lines. Set the new `sensai.reviewWholeFile` to restore whole-file review as the second stage. The CLI reviewer mirrors this: `--staged` scopes stage two to the function, `--whole-file` widens it back.
+## 0.5.0 — 2026-08-25
 
 ### Added
 
 - Cancel a running review from the panel. A "取消審查" button appears while a review is in flight (and an inline "取消" on the updating note when a previous result is kept on screen). It aborts the in-flight request for the current file -- both stages share one signal -- and clears any pending debounce so the cancel is not immediately followed by another save-triggered review. The panel returns to idle; a cancel is reported as cancelled, not as an error.
 - `sensai.apiKey` setting. Recent Claude Code Router builds require an API key; the extension now sends it (via the SDK's `Authorization` header). Empty falls back to the `ANTHROPIC_API_KEY` environment variable and then to a placeholder, so older routers that do not authenticate keep working unchanged. The CLI reviewer takes the same value via `--api-key`. The setting's description warns to keep the key in User Settings rather than a committed `.vscode/settings.json`.
+- The panel meta line now shows the time a result was produced (HH:MM:SS), after the duration. When a result lingers on screen while a later review runs, or is left over from an earlier save, the timestamp says when it was actually computed.
+
+### Changed
+
+- The default review scope is smaller. The second stage used to review the whole file; it now reviews only the function the change sits in, found by a brace-matching heuristic (`src/funcscope.ts`). Stage one still reports on the changed lines first. Scoping to the function is faster and cheaper and keeps findings close to the edit; a change outside any function (a global declaration, a macro) falls back to the changed lines. Set the new `sensai.reviewWholeFile` to restore whole-file review as the second stage. The CLI reviewer mirrors this: `--staged` scopes stage two to the function, `--whole-file` widens it back.
 
 ### Performance
 
@@ -19,10 +20,6 @@ All notable changes to sensAI are documented in this file.
 - The project header index is no longer rebuilt on every review. It was a synchronous full-tree scan (`readdirSync` over the whole workspace, up to 20000 entries) that ran on the extension host thread, and because a fresh file-access object was created per review the cache never survived — so with autosave every save could rescan the entire repo and stall the UI. The index is now shared across reviews and invalidated only when a header file is added or removed.
 - Closing a file now frees its cached state. `documents` (which held a strong reference to the `TextDocument`, keeping it from being collected) and `lastSource` (a full copy of each reviewed file's text) grew without bound over a session; both, along with the burst bookkeeping, are dropped on `onDidCloseTextDocument`.
 - File-system watcher event listeners are now collected as disposables instead of being dropped.
-
-### Added
-
-- The panel meta line now shows the time a result was produced (HH:MM:SS), after the duration. When a result lingers on screen while a later review runs, or is left over from an earlier save, the timestamp says when it was actually computed.
 
 ## 0.4.1 — 2026-08-24
 
