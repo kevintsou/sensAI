@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { buildContext, realFileAccess } from "../out/context.js";
+import { buildContext, realFileAccess, isInSkippedDir } from "../out/context.js";
 import {
   applySeverityBudget,
   carryOverFindings,
@@ -144,6 +144,23 @@ test("header 索引跨呼叫快取，直到 invalidateIndex 才重建", () => {
   assert.notStrictEqual(rebuilt, first);
   assert.equal(rebuilt.has("a.h"), true);
   assert.equal(rebuilt.has("b.h"), true);
+});
+
+test("isInSkippedDir：build 輸出目錄裡的 header 不該讓索引失效", () => {
+  // 索引不掃這些目錄，所以它們裡面的 header 增刪要被 watcher 濾掉，
+  // 否則一 build 就反覆清空快取。兩種分隔線都要認得。
+  assert.equal(isInSkippedDir("build/gen/regs.h"), true);
+  assert.equal(isInSkippedDir("build\\gen\\regs.h"), true);
+  assert.equal(isInSkippedDir("out/foo.h"), true);
+  assert.equal(isInSkippedDir("Debug/x.h"), true);
+  assert.equal(isInSkippedDir("node_modules/pkg/a.h"), true);
+  // 真正的原始碼目錄不濾掉 —— 這些 header 增刪確實該讓索引重建。
+  assert.equal(isInSkippedDir("src/hal/uart.h"), false);
+  assert.equal(isInSkippedDir("inc/regs.h"), false);
+  assert.equal(isInSkippedDir("regs.h"), false);
+  // 只比對完整路徑片段，不在較長的名字裡誤命中（buildsystem/ 不是 build/）。
+  assert.equal(isInSkippedDir("buildsystem/regs.h"), false);
+  assert.equal(isInSkippedDir("my-out-dir/regs.h"), false);
 });
 
 test("evidence 引用到原始碼裡存在的識別字才算數", () => {

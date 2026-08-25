@@ -11,9 +11,20 @@ import { HeaderFile, ReviewContext } from "./types";
  */
 const INCLUDE_RE = /^[ \t]*(?:#[ \t]*include|\.include)[ \t]*"([^"]+)"/gm;
 
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", "out", "obj", "Debug", "Release", ".vscode",
 ]);
+
+/**
+ * 路徑（相對 workspace root）是否落在會被 buildHeaderIndex 跳過的目錄裡。
+ *
+ * header 索引不掃這些目錄，所以這些目錄裡的 header 增刪**不該**讓索引失效 ——
+ * 韌體專案一 build 就在 build/out 產出／刪除大量 .h，若不濾掉，快取會被反覆
+ * 清空，等於每次 review 又全樹重掃。watcher 的失效回呼用這個把它們擋掉。
+ */
+export function isInSkippedDir(relPath: string): boolean {
+  return relPath.split(/[\\/]/).some((seg) => SKIP_DIRS.has(seg));
+}
 
 const HEADER_EXTS = new Set([".h", ".hpp", ".hh", ".inc", ".s", ".S"]);
 

@@ -3,7 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
-import { buildContext, realFileAccess, CachingFileAccess } from "./context";
+import { buildContext, realFileAccess, CachingFileAccess, isInSkippedDir } from "./context";
 import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
 import {
   CarriedFindings,
@@ -800,7 +800,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const headerWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(root, "**/*.{h,hpp,hh,inc,s,S}"),
     );
-    const invalidate = () => controller.invalidateHeaderIndex();
+    // 只有落在「索引會掃的目錄」裡的 header 增刪才失效。build/out/dist 這些
+    // buildHeaderIndex 本來就跳過，一 build 就在那裡churn 大量 .h，不濾掉的話
+    // 快取會被反覆清空，等於白做快取。glob 不好排除多目錄，改在回呼裡濾。
+    const invalidate = (uri: vscode.Uri) => {
+      if (!isInSkippedDir(path.relative(root, uri.fsPath))) {
+        controller.invalidateHeaderIndex();
+      }
+    };
 
     context.subscriptions.push(
       configWatcher,

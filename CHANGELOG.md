@@ -10,6 +10,7 @@ All notable changes to sensAI are documented in this file.
 
 ### Performance
 
+- The header-index watcher no longer invalidates the cache for headers under build output directories. `buildHeaderIndex` skips `build/out/dist/Debug/Release/obj/node_modules/.git/.vscode`, but the watcher's glob did not, so a build that churned `.h` files under those directories cleared the cache repeatedly and forced a full-tree rescan on the next review -- undoing the caching. The watcher now ignores create/delete events whose path falls in a skipped directory, matching what the index actually scans.
 - The project header index is no longer rebuilt on every review. It was a synchronous full-tree scan (`readdirSync` over the whole workspace, up to 20000 entries) that ran on the extension host thread, and because a fresh file-access object was created per review the cache never survived — so with autosave every save could rescan the entire repo and stall the UI. The index is now shared across reviews and invalidated only when a header file is added or removed.
 - Closing a file now frees its cached state. `documents` (which held a strong reference to the `TextDocument`, keeping it from being collected) and `lastSource` (a full copy of each reviewed file's text) grew without bound over a session; both, along with the burst bookkeeping, are dropped on `onDidCloseTextDocument`.
 - File-system watcher event listeners are now collected as disposables instead of being dropped.
