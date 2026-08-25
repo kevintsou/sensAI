@@ -16,7 +16,7 @@ import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
 import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
-import { EndpointUnavailableError, requestReview } from "./review";
+import { EndpointUnavailableError, ReviewCancelledError, requestReview } from "./review";
 import { loadRules, rulesPath } from "./rules";
 import { PinStore, PinBackingStore, pinKey } from "./pins";
 import { SingleFlight } from "./singleflight";
@@ -96,6 +96,8 @@ class Controller {
   private readonly documents = new Map<string, vscode.TextDocument>();
   private lastSource = new Map<string, string>();
   private readonly pins: PinStore;
+  /** 每個進行中審查的檔案對應一個 AbortController，供使用者取消。 */
+  private readonly inFlightAborts = new Map<string, AbortController>();
   /**
    * 跨 review 共用的檔案存取 + header 索引快取。索引是整棵樹的同步掃描，
    * 每次 review 都重建會阻塞 extension host —— 所以留著這一份，只在 header
@@ -301,6 +303,12 @@ class Controller {
       return;
     }
 
+    // 這次審查的取消控制。SingleFlight 保證同檔同時只有一輪 runReview，但補跑
+    // 會換一個新的 AbortController —— 先中止並取代舊的，避免殘留。
+    this.inFlightAborts.get(filePath)?.abort();
+    const abort = new AbortController();
+    this.inFlightAborts.set(filePath, abort);
+
     // 面板已有結果時不要清空回「審查中」—— 連續存檔會一輪輪蓋掉剛顯示的意見，
     // 造成空窗。留著上一輪結果、只在頂部標「更新中」，等新結果到位再蓋過去。
     if (this.panel.hasResult()) {
@@ -324,6 +332,7 @@ class Controller {
       model: settings.model,
       // 空字串時交給 review.ts 的 fallback（環境變數 → 佔位字串），舊版 CCR 照舊能用。
       apiKey: settings.apiKey || undefined,
+      signal: abort.signal,
       timeoutMs: settings.requestTimeoutMs,
       archId: this.config.assemblyArch,
       onUnknownRuleId: (id: string) => {
@@ -504,7 +513,12 @@ class Controller {
         this.setStatus(`$(comment-discussion) sensAI ${kept.length}`, `${kept.length} 則意見`);
       }
     } catch (err) {
-      if (err instanceof EndpointUnavailableError) {
+      if (err instanceof ReviewCancelledError) {
+        // 使用者主動取消：不是錯誤。回到閒置，狀態列給個中性的字。
+        this.panel.setState({ kind: "idle" });
+        this.setStatus("$(circle-slash) sensAI", "已取消");
+        this.output.appendLine(`[review] ${path.basename(filePath)} 的審查已取消。`);
+      } else if (err instanceof EndpointUnavailableError) {
         // CCR 沒開是常態，不要用錯誤視窗打斷工作。
         this.panel.setState({ kind: "unavailable", message: err.message });
         this.setStatus("$(circle-slash) sensAI", err.message);
@@ -515,6 +529,31 @@ class Controller {
         this.setStatus("$(error) sensAI", message);
         this.output.appendLine(`[review] ${message}`);
       }
+    } finally {
+      // 只清掉屬於這一輪的 controller —— 補跑已經換上新的，別誤刪。
+      if (this.inFlightAborts.get(filePath) === abort) {
+        this.inFlightAborts.delete(filePath);
+      }
+    }
+  }
+
+  /**
+   * 取消目前檔案進行中的審查。
+   *
+   * abort 進行中的請求（兩階段都會收到同一個 signal），並清掉還在等的 debounce，
+   * 免得取消完緊接著又送一次。面板由 runReview 的 catch 收到 ReviewCancelledError
+   * 後回到閒置。
+   */
+  cancelReview(): void {
+    const filePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (!filePath) {
+      return;
+    }
+    this.debouncer.cancel(filePath);
+    const abort = this.inFlightAborts.get(filePath);
+    if (abort) {
+      abort.abort();
+      this.output.appendLine(`[review] 使用者取消了 ${path.basename(filePath)} 的審查。`);
     }
   }
 
@@ -725,6 +764,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onUnpin: (key) => controller.unpin(key),
     onJumpTo: (filePath, line) => void controller.jumpToFile(filePath, line),
     onComment: (key, text) => controller.setPinComment(key, text),
+    onCancel: () => controller.cancelReview(),
   });
   // 釘選與筆記存到 workspaceState：專案級、跨重啟保留、不進版控。
   const PIN_KEY = "sensai.pins";

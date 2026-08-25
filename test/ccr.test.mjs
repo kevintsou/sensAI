@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import * as http from "node:http";
 
-import { requestReview, EndpointUnavailableError } from "../out/review.js";
+import { requestReview, EndpointUnavailableError, ReviewCancelledError } from "../out/review.js";
 
 const CTX = {
   filePath: "/proj/src/uart.c",
@@ -213,4 +213,58 @@ test("C 審查時不注入組語的 ABI 事實", async () => {
     await router.close();
   }
   assert.equal(/callee-saved/.test(router.requests[0].body.system), false);
+});
+
+test("signal 已 abort：丟 ReviewCancelledError，不當成一般錯誤", async () => {
+  const router = await mockRouter((res) => replyWithFindings(res, []));
+  const ac = new AbortController();
+  ac.abort(); // 送出前就取消
+  try {
+    await assert.rejects(
+      () =>
+        requestReview(CTX, RULES, {
+          endpoint: router.endpoint,
+          model: "m",
+          timeoutMs: 5000,
+          archId: "riscv32-andes-v5",
+          signal: ac.signal,
+        }),
+      (err) => {
+        assert.ok(err instanceof ReviewCancelledError);
+        return true;
+      },
+    );
+  } finally {
+    await router.close();
+  }
+});
+
+test("請求進行中 abort：丟 ReviewCancelledError", async () => {
+  // router 故意不回應，讓請求卡著，好在中途 abort。
+  let received;
+  const router = await mockRouter(() => {
+    received?.();
+  });
+  const ac = new AbortController();
+  const inFlight = new Promise((resolve) => (received = resolve));
+  try {
+    const p = requestReview(CTX, RULES, {
+      endpoint: router.endpoint,
+      model: "m",
+      timeoutMs: 5000,
+      archId: "riscv32-andes-v5",
+      signal: ac.signal,
+    });
+    await inFlight; // 確定請求已送達 router（卡在等回應）
+    ac.abort();
+    await assert.rejects(
+      () => p,
+      (err) => {
+        assert.ok(err instanceof ReviewCancelledError);
+        return true;
+      },
+    );
+  } finally {
+    await router.close();
+  }
 });

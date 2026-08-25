@@ -6,6 +6,7 @@ All notable changes to sensAI are documented in this file.
 
 ### Added
 
+- Cancel a running review from the panel. A "取消審查" button appears while a review is in flight (and an inline "取消" on the updating note when a previous result is kept on screen). It aborts the in-flight request for the current file -- both stages share one signal -- and clears any pending debounce so the cancel is not immediately followed by another save-triggered review. The panel returns to idle; a cancel is reported as cancelled, not as an error.
 - `sensai.apiKey` setting. Recent Claude Code Router builds require an API key; the extension now sends it (via the SDK's `Authorization` header). Empty falls back to the `ANTHROPIC_API_KEY` environment variable and then to a placeholder, so older routers that do not authenticate keep working unchanged. The CLI reviewer takes the same value via `--api-key`. The setting's description warns to keep the key in User Settings rather than a committed `.vscode/settings.json`.
 
 ### Performance

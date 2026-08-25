@@ -29,6 +29,16 @@ export interface ReviewClientOptions {
    * https://api.anthropic.com。
    */
   apiKey?: string;
+  /** 中止這次請求。使用者按面板的取消時 abort。 */
+  signal?: AbortSignal;
+}
+
+/** 使用者取消審查時丟這個，讓上層知道是刻意中止、不是錯誤。 */
+export class ReviewCancelledError extends Error {
+  constructor() {
+    super("審查已取消");
+    this.name = "ReviewCancelledError";
+  }
 }
 
 /** CCR 沒啟動時丟這個，讓上層可以靜默降級而不是跳錯誤視窗。 */
@@ -199,19 +209,26 @@ export async function requestReview(
 
   let response: Anthropic.Message;
   try {
-    response = await client.messages.create({
-      model: opts.model,
-      max_tokens: 16000,
-      system: systemPrompt(
-        ctx.language,
-        ctx.language === "asm" ? archFacts(opts.archId) : null,
-        rules.length === 0,
-      ),
-      messages: [{ role: "user", content: buildUserMessage(ctx, rules, opts.changed ?? null) }],
-      tools: [FINDINGS_TOOL],
-      tool_choice: { type: "tool", name: FINDINGS_TOOL.name },
-    });
+    response = await client.messages.create(
+      {
+        model: opts.model,
+        max_tokens: 16000,
+        system: systemPrompt(
+          ctx.language,
+          ctx.language === "asm" ? archFacts(opts.archId) : null,
+          rules.length === 0,
+        ),
+        messages: [{ role: "user", content: buildUserMessage(ctx, rules, opts.changed ?? null) }],
+        tools: [FINDINGS_TOOL],
+        tool_choice: { type: "tool", name: FINDINGS_TOOL.name },
+      },
+      { signal: opts.signal },
+    );
   } catch (err) {
+    // abort 會丟 APIUserAbortError（或 signal 已 aborted）——歸成取消，不是錯誤。
+    if (err instanceof Anthropic.APIUserAbortError || opts.signal?.aborted) {
+      throw new ReviewCancelledError();
+    }
     if (isConnectionProblem(err)) {
       throw new EndpointUnavailableError(opts.endpoint, (err as Error).message);
     }

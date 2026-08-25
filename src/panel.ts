@@ -21,6 +21,8 @@ export interface PanelHandlers {
   onJumpTo(filePath: string, line: number): void;
   /** 更新某則釘選的筆記。 */
   onComment(key: string, text: string): void;
+  /** 取消目前進行中的審查。 */
+  onCancel(): void;
 }
 
 function escapeHtml(s: string): string {
@@ -91,6 +93,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         } else if (msg.type === "comment" && typeof msg.key === "string" && typeof msg.text === "string") {
           // 只回存，不重繪 —— 重繪會把使用者正在打字的 textarea 清掉。
           this.handlers.onComment(msg.key, msg.text);
+        } else if (msg.type === "cancel") {
+          this.handlers.onCancel();
         }
       },
     );
@@ -194,7 +198,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       case "idle":
         return `<p class="muted">存檔 C 檔案後會在這裡顯示審查結果。</p>`;
       case "reviewing":
-        return `<p class="muted">審查中：${escapeHtml(this.state.file)}</p>`;
+        return `<p class="muted">審查中：${escapeHtml(this.state.file)}</p>
+                <button class="cancel" data-cancel>取消審查</button>`;
       case "skipped":
         return `<p class="muted">已跳過 ${escapeHtml(this.state.file)}</p>
                 <p class="muted">${escapeHtml(this.state.reason)}</p>`;
@@ -210,9 +215,10 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 
   private resultHtml(result: ReviewResult): string {
     const collapsed = result.collapsed ?? [];
-    // 保留舊結果、新一輪進行中時，頂部一條輕量提示；不清畫面。
+    // 保留舊結果、新一輪進行中時，頂部一條輕量提示 + 取消鈕；不清畫面。
     const updatingNote = this.updating
-      ? `<div class="updating">↻ 更新中，仍顯示上一次的結果…</div>`
+      ? `<div class="updating">↻ 更新中，仍顯示上一次的結果…
+           <button class="cancel inline" data-cancel>取消</button></div>`
       : "";
     const stageNote =
       result.stage === "changed"
@@ -373,6 +379,27 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     padding: 2px 8px;
   }
   button.mute:hover { color: var(--vscode-foreground); }
+  button.cancel {
+    background: none;
+    border: 1px solid var(--vscode-descriptionForeground);
+    border-radius: 2px;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.9em;
+    padding: 2px 10px;
+    margin-top: 6px;
+  }
+  button.cancel:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-foreground);
+  }
+  button.cancel.inline {
+    margin-top: 0;
+    margin-left: 8px;
+    padding: 0 6px;
+    font-size: 0.85em;
+  }
   .pinned {
     margin-bottom: 16px;
     padding-bottom: 8px;
@@ -448,6 +475,9 @@ ${this.bodyHtml()}
   document.querySelectorAll("button.unpin").forEach((b) => {
     b.addEventListener("click", () =>
       vscode.postMessage({ type: "unpin", key: b.dataset.key }));
+  });
+  document.querySelectorAll("button[data-cancel]").forEach((b) => {
+    b.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
   });
   // 筆記即時回存。用 input 事件（每次打字）加 blur（保險），但只送不重繪 ——
   // 重繪會清掉正在編輯的 textarea，所以 onComment 那端刻意不觸發 render。
