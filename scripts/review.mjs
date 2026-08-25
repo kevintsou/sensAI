@@ -48,6 +48,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--endpoint") opts.endpoint = argv[++i];
     else if (a === "--model") opts.model = argv[++i];
+    else if (a === "--api-key") opts.apiKey = argv[++i];
     else if (a === "--arch") opts.arch = argv[++i];
     else if (a === "--root") opts.root = argv[++i];
     else if (a === "--json") opts.json = true;
@@ -64,6 +65,8 @@ const USAGE = `用法：npm run review -- <檔案> [選項]
 選項：
   --endpoint <url>   CCR 位址（預設 http://127.0.0.1:3456）
   --model <name>     送給 CCR 的 model 欄位，也就是路由 key
+  --api-key <key>    送給 endpoint 的 API key（新版 CCR 需要）。
+                     省略時讀環境變數 ANTHROPIC_API_KEY，再退回佔位字串
   --arch <id>        覆寫 assembly.arch（riscv32-andes-v5 / armv7e-m）
   --root <dir>       專案根目錄。省略時從檔案往上找含 .sensai/ 的目錄
   --staged           走與擴充相同的兩階段流程（改動處 + 整份，最後去重）。
@@ -194,6 +197,7 @@ async function main() {
       const clientOpts = {
         endpoint: opts.endpoint,
         model: opts.model,
+        apiKey: opts.apiKey,
         timeoutMs: 180000,
         archId: opts.arch ?? config.assemblyArch,
         onUnknownRuleId: warnUnknownRuleId,
@@ -217,6 +221,7 @@ async function main() {
       raw = await requestReview(ctx, rules, {
         endpoint: opts.endpoint,
         model: opts.model,
+        apiKey: opts.apiKey,
         timeoutMs: 180000,
         archId: opts.arch ?? config.assemblyArch,
         onUnknownRuleId: warnUnknownRuleId,

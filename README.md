@@ -74,6 +74,7 @@ enabling reviews on confidential firmware repositories.
 | `sensai.debounceMs` | `1000` | Quiet period after a save before the review is sent; `0` sends immediately. |
 | `sensai.endpoint` | `http://127.0.0.1:3456` | Router endpoint. |
 | `sensai.model` | `claude-opus-5` | Router model key. |
+| `sensai.apiKey` | empty | API key sent to the endpoint. Recent Claude Code Router builds require it. Store it in **User Settings**, not the project's `.vscode/settings.json`, so it is not committed or synced. Empty falls back to the `ANTHROPIC_API_KEY` environment variable. |
 | `sensai.rulesPath` | empty | A rules file; relative paths use the workspace root. |
 | `sensai.includeDepth` | `2` | Recursive project-header depth. |
 | `sensai.contextBudgetBytes` | `120000` | Header-context byte limit. |

@@ -114,6 +114,11 @@
           "default": "claude-opus-5",
           "description": "送給 CCR 的 model 欄位，實際上是路由 key。"
         },
+        "sensai.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "送給 endpoint 的 API key（放在 `Authorization: Bearer` 標頭）。新版 Claude Code Router 需要它；舊版不驗證可留空。\n\n**安全提醒：** 這是機密。建議填在**使用者設定（User Settings）**而非專案的 `.vscode/settings.json`，以免被 commit 進版控或被 Settings Sync 同步出去。留空時會改讀環境變數 `ANTHROPIC_API_KEY`。"
+        },
         "sensai.rulesPath": {
           "type": "string",
           "default": "",

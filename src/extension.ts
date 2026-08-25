@@ -36,6 +36,7 @@ interface Settings {
   debounceMs: number;
   endpoint: string;
   model: string;
+  apiKey: string;
   rulesPath: string;
   includeDepth: number;
   contextBudgetBytes: number;
@@ -49,6 +50,7 @@ function readSettings(): Settings {
     enabled: c.get("enabled", true),
     endpoint: c.get("endpoint", "http://127.0.0.1:3456"),
     model: c.get("model", "claude-opus-5"),
+    apiKey: c.get("apiKey", ""),
     rulesPath: c.get("rulesPath", ""),
     debounceMs: c.get("debounceMs", 1000),
     includeDepth: c.get("includeDepth", 2),
@@ -320,6 +322,8 @@ class Controller {
     const clientOpts = {
       endpoint: settings.endpoint,
       model: settings.model,
+      // 空字串時交給 review.ts 的 fallback（環境變數 → 佔位字串），舊版 CCR 照舊能用。
+      apiKey: settings.apiKey || undefined,
       timeoutMs: settings.requestTimeoutMs,
       archId: this.config.assemblyArch,
       onUnknownRuleId: (id: string) => {

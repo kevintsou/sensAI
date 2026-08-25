@@ -22,9 +22,11 @@ export interface ReviewClientOptions {
    */
   onUnknownRuleId?: (id: string) => void;
   /**
-   * CCR 不驗證，所以預設是佔位字串。
-   * 想略過 CCR 直接打 Anthropic API 時，設 ANTHROPIC_API_KEY 並把
-   * endpoint 指向 https://api.anthropic.com。
+   * 送給 endpoint 的 API key（SDK 會放進 Authorization 標頭）。
+   * 新版 Claude Code Router 會驗證，需要真的 key；舊版不驗證可省略。
+   * 省略時退回環境變數 ANTHROPIC_API_KEY，再退回佔位字串 "ccr"。
+   * 想略過 CCR 直接打 Anthropic API 時，設真 key 並把 endpoint 指向
+   * https://api.anthropic.com。
    */
   apiKey?: string;
 }
@@ -188,7 +190,8 @@ export async function requestReview(
 ): Promise<Finding[]> {
   const client = new Anthropic({
     baseURL: opts.endpoint,
-    // CCR 不驗證，但 SDK 要求非空字串。指向真正的 Anthropic API 時才需要真的 key。
+    // 依序：設定的 key → 環境變數 → 佔位字串。新版 CCR 會驗證，需要真 key；
+    // 舊版不驗證，SDK 又要求非空字串，所以退回佔位字串 "ccr" 讓舊版照舊能用。
     apiKey: opts.apiKey || process.env.ANTHROPIC_API_KEY || "ccr",
     timeout: opts.timeoutMs,
     maxRetries: 1, // CCR 沒開的時候要快點失敗，不要卡著重試

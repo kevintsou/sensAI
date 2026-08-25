@@ -4,6 +4,10 @@ All notable changes to sensAI are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `sensai.apiKey` setting. Recent Claude Code Router builds require an API key; the extension now sends it (via the SDK's `Authorization` header). Empty falls back to the `ANTHROPIC_API_KEY` environment variable and then to a placeholder, so older routers that do not authenticate keep working unchanged. The CLI reviewer takes the same value via `--api-key`. The setting's description warns to keep the key in User Settings rather than a committed `.vscode/settings.json`.
+
 ### Performance
 
 - The project header index is no longer rebuilt on every review. It was a synchronous full-tree scan (`readdirSync` over the whole workspace, up to 20000 entries) that ran on the extension host thread, and because a fresh file-access object was created per review the cache never survived — so with autosave every save could rescan the entire repo and stall the UI. The index is now shared across reviews and invalidated only when a header file is added or removed.
