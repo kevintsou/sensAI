@@ -2,6 +2,26 @@
 
 All notable changes to sensAI are documented in this file.
 
+## 0.5.1 — 2026-09-04
+
+### Fixed
+
+- Findings acted on the wrong file. The panel rendered each finding against its result's `filePath`, but the controller resolved the target file for mute, pin and jump from the active editor — so any action taken after switching tabs landed on whichever file was in front. Muting derived its key from the wrong line's text, so the mute never matched on a later review and silently never took effect. The exported false-positive report, the pin checkbox state and jump-to-line were wrong the same way. The panel now supplies the path from the state that rendered the item, so what is shown and what is acted on cannot diverge. Cancel is routed the same way instead of cancelling whichever file is in front.
+- Pin keys included the line number, so inserting a line above a pinned finding changed its key: the checkbox showed unpinned, and clicking again created a duplicate record. The key now binds the line's text, which survives shifts from edits elsewhere and still separates two findings sharing a rule and message.
+- Audit entries were only written after a successful review. A request that reached the provider and then failed had already sent the source but left no record — the wrong direction to fail for a log that exists because the sources are under NDA. Entries are now written on every attempted request and carry the outcome.
+- The CLI's staged summary said "whole file" even when stage two was scoped to the enclosing function.
+- The findings tool description was worded for C, but is used for assembly too.
+- Clearing local mutes now triggers a re-review, so the unmuted findings actually reappear.
+- `pinKey`'s NUL separator is written as an escape rather than a literal 0x00 byte, which had made `src/pins.ts` binary as far as git, grep and some editors were concerned. Pin keys parse identically, so stored pins are unaffected.
+
+### Performance
+
+- The header index walked the tree synchronously on the extension host and stopped after 20000 entries without reporting it. On a 25600-header tree that indexed 69% of it — and which 69% depended on traversal order — so includes falling in the remainder silently failed to resolve, and the model reviewed without the macro and register definitions the include mechanism exists to supply. The walk is async now, concurrent callers share one build, the limit is far higher, and hitting it is reported.
+- `changedRanges` runs the diff first and only asks `ls-files` when the diff comes back empty, which is the only case still needing the tracked/unchanged distinction.
+
+### Added
+
+- Pins can be cleared and reviews cancelled from the command palette.
 ## 0.5.0 — 2026-08-25
 
 ### Added
