@@ -4,25 +4,31 @@ import { pinKey } from "./pins";
 
 export type PanelState =
   | { kind: "idle" }
-  | { kind: "reviewing"; file: string }
+  | { kind: "reviewing"; file: string; filePath: string }
   | { kind: "result"; result: ReviewResult }
   | { kind: "skipped"; file: string; reason: string }
   | { kind: "unavailable"; message: string }
   | { kind: "error"; message: string };
 
 export interface PanelHandlers {
-  onJump(line: number): void;
-  onMute(finding: Finding): void;
+  /**
+   * 跳到某則意見的位置。
+   *
+   * 檔案路徑一律由面板從自己的狀態帶出來，不讓下游去看 activeTextEditor ——
+   * 面板上的結果是某一次審查的產物，使用者看它的時候前景分頁很可能已經換過了。
+   */
+  onJump(filePath: string, line: number): void;
+  onMute(finding: Finding, filePath: string): void;
   /** 釘選一則目前顯示的意見（index 對應 this.findings）。 */
-  onPin(finding: Finding): void;
+  onPin(finding: Finding, filePath: string): void;
   /** 取消釘選。 */
   onUnpin(key: string): void;
   /** 從絕對路徑跳到某行（釘選區的意見可能來自別的檔案）。 */
   onJumpTo(filePath: string, line: number): void;
   /** 更新某則釘選的筆記。 */
   onComment(key: string, text: string): void;
-  /** 取消目前進行中的審查。 */
-  onCancel(): void;
+  /** 取消某個檔案進行中的審查。 */
+  onCancel(filePath: string): void;
 }
 
 function escapeHtml(s: string): string {
@@ -57,6 +63,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   private state: PanelState = { kind: "idle" };
   private findings: Finding[] = [];
   private pins: PinnedFinding[] = [];
+  /** 目前這批結果對應的原始碼，逐行。算釘選 key 用。 */
+  private sourceLines: string[] = [];
   /** 新一輪審查進行中，但畫面上還留著上一輪的結果。只在有結果可留時為 true。 */
   private updating = false;
 
@@ -74,19 +82,22 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         text?: string;
         filePath?: string;
       }) => {
-        if (msg.type === "jump" && typeof msg.line === "number") {
-          this.handlers.onJump(msg.line);
+        // 主結果區的動作一律配這批結果自己的檔案，不看前景分頁。
+        // 渲染（例如釘選勾選框的狀態）用的也是同一個路徑，兩邊才會一致。
+        const file = this.resultFilePath();
+        if (msg.type === "jump" && typeof msg.line === "number" && file) {
+          this.handlers.onJump(file, msg.line);
         } else if (msg.type === "jumpTo" && typeof msg.filePath === "string" && typeof msg.line === "number") {
           this.handlers.onJumpTo(msg.filePath, msg.line);
-        } else if (msg.type === "mute" && typeof msg.index === "number") {
+        } else if (msg.type === "mute" && typeof msg.index === "number" && file) {
           const finding = this.findings[msg.index];
           if (finding) {
-            this.handlers.onMute(finding);
+            this.handlers.onMute(finding, file);
           }
-        } else if (msg.type === "pin" && typeof msg.index === "number") {
+        } else if (msg.type === "pin" && typeof msg.index === "number" && file) {
           const finding = this.findings[msg.index];
           if (finding) {
-            this.handlers.onPin(finding);
+            this.handlers.onPin(finding, file);
           }
         } else if (msg.type === "unpin" && typeof msg.key === "string") {
           this.handlers.onUnpin(msg.key);
@@ -94,7 +105,11 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
           // 只回存，不重繪 —— 重繪會把使用者正在打字的 textarea 清掉。
           this.handlers.onComment(msg.key, msg.text);
         } else if (msg.type === "cancel") {
-          this.handlers.onCancel();
+          // 更新中時面板留著上一輪結果，路徑同樣取自結果本身。
+          const target = file ?? (this.state.kind === "reviewing" ? this.state.filePath : undefined);
+          if (target) {
+            this.handlers.onCancel(target);
+          }
         }
       },
     );
@@ -111,12 +126,26 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
       state.kind === "result"
         ? [...state.result.findings, ...(state.result.collapsed ?? [])]
         : [];
+    this.sourceLines = state.kind === "result" ? state.result.sourceLines : [];
     this.render();
   }
 
   /** 面板上是否已有可顯示的審查結果。 */
   hasResult(): boolean {
     return this.state.kind === "result";
+  }
+
+  /** 目前顯示的這批結果是哪個檔案的。沒有結果時 undefined。 */
+  private resultFilePath(): string | undefined {
+    return this.state.kind === "result" ? this.state.result.filePath : undefined;
+  }
+
+  /**
+   * 面板上這批結果對應的原始碼行內容。釘選 key 要用它算，跟 Controller
+   * 存下來的審查當下版本一致，兩邊才會對得起來。
+   */
+  private lineTextFor(f: Finding): string {
+    return this.sourceLines[f.line - 1] ?? "";
   }
 
   /**
@@ -252,7 +281,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         const rule = f.rule_id
           ? `<span class="rule">${escapeHtml(f.rule_id)}</span>`
           : "";
-        const isPinned = pinnedKeys.has(pinKey(result.filePath, f));
+        const isPinned = pinnedKeys.has(pinKey(result.filePath, f, this.lineTextFor(f)));
         return `<div class="finding sev-${f.severity}">
           <div class="row">
             <label class="pin" title="釘住這則意見，不被後續審查蓋掉">

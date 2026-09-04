@@ -126,7 +126,7 @@ class Controller {
   /** 取得跨 review 共用的 FileAccess；workspace root 換了就重建。 */
   private getFileAccess(root: string): CachingFileAccess {
     if (!this.fileAccess || this.fileAccessRoot !== root) {
-      this.fileAccess = realFileAccess(root);
+      this.fileAccess = realFileAccess(root, (msg) => this.output.appendLine(`[index] ${msg}`));
       this.fileAccessRoot = root;
     }
     return this.fileAccess;
@@ -252,7 +252,7 @@ class Controller {
     // 結果回來時行號是對著這一版算的，未必還對得上編輯器裡的內容。
     const sentVersion = document.version;
 
-    const ctx: ReviewContext = buildContext(
+    const ctx: ReviewContext = await buildContext(
       filePath,
       source,
       {
@@ -319,6 +319,7 @@ class Controller {
     } else {
       this.panel.setState({
         kind: "reviewing",
+        filePath,
         file: `${path.basename(filePath)}（${LANGUAGE_LABEL[language]}，${
           syntaxOnly ? "沒有規則，只檢查語法" : `${rules.length} 條規則`
         }）`,
@@ -344,6 +345,28 @@ class Controller {
             "常出現的話，通常代表規則寫得不夠具體，模型在照命名慣例猜。",
         );
       },
+    };
+    /**
+     * 寫一筆稽核記錄。成功與失敗都要寫 —— 請求送到一半才失敗的情況下，
+     * 原始碼已經離開這台機器了，這時候留白等於在最需要記錄的時候沒有記錄。
+     */
+    const writeAudit = (
+      outcome: "ok" | "failed" | "cancelled",
+      findings = 0,
+      droppedCount = 0,
+    ) => {
+      appendAudit(root, this.config, {
+        ts: new Date().toISOString(),
+        outcome,
+        file: path.relative(root, filePath),
+        headers: ctx.headers.length,
+        bytes: source.length + ctx.headers.reduce((n, h) => n + h.text.length, 0),
+        endpoint: settings.endpoint,
+        model: settings.model,
+        findings,
+        dropped: droppedCount,
+        durationMs: Date.now() - started,
+      });
     };
     const logDropped = (dropped: DroppedFinding[]) => {
       for (const d of dropped) {
@@ -371,6 +394,7 @@ class Controller {
         kind: "result",
         result: {
           filePath,
+          sourceLines: lines,
           findings: shown,
           collapsed,
           dropped,
@@ -516,7 +540,6 @@ class Controller {
         this.burstFindings.delete(filePath);
       }
 
-      const durationMs = Date.now() - started;
       publish(
         kept,
         dropped,
@@ -527,17 +550,7 @@ class Controller {
             : "full",
       );
 
-      appendAudit(root, this.config, {
-        ts: new Date().toISOString(),
-        file: path.relative(root, filePath),
-        headers: ctx.headers.length,
-        bytes: source.length + ctx.headers.reduce((n, h) => n + h.text.length, 0),
-        endpoint: settings.endpoint,
-        model: settings.model,
-        findings: kept.length,
-        dropped: dropped.length,
-        durationMs,
-      });
+      writeAudit("ok", kept.length, dropped.length);
 
       if (kept.length === 0) {
         this.setStatus("$(check) sensAI", "沒有發現問題");
@@ -545,6 +558,7 @@ class Controller {
         this.setStatus(`$(comment-discussion) sensAI ${kept.length}`, `${kept.length} 則意見`);
       }
     } catch (err) {
+      writeAudit(err instanceof ReviewCancelledError ? "cancelled" : "failed");
       if (err instanceof ReviewCancelledError) {
         // 使用者主動取消：不是錯誤。回到閒置，狀態列給個中性的字。
         this.panel.setState({ kind: "idle" });
@@ -576,27 +590,36 @@ class Controller {
    * 免得取消完緊接著又送一次。面板由 runReview 的 catch 收到 ReviewCancelledError
    * 後回到閒置。
    */
-  cancelReview(): void {
-    const filePath = vscode.window.activeTextEditor?.document.uri.fsPath;
-    if (!filePath) {
+  cancelReview(filePath?: string): void {
+    // 面板會指名要取消哪個檔案（它顯示的就是那個檔案的結果）。
+    // 從命令面板叫進來時沒有指名，才退回目前這個分頁。
+    const target = filePath ?? vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (!target) {
       return;
     }
-    this.debouncer.cancel(filePath);
-    const abort = this.inFlightAborts.get(filePath);
+    const abort = this.inFlightAborts.get(target);
+    this.debouncer.cancel(target);
     if (abort) {
       abort.abort();
-      this.output.appendLine(`[review] 使用者取消了 ${path.basename(filePath)} 的審查。`);
+      this.output.appendLine(`[review] 使用者取消了 ${path.basename(target)} 的審查。`);
     }
   }
+  /**
+   * 取得某個檔案「產生這些意見時」的內容。
+   *
+   * 一定要用審查當下那一版：意見的行號是對著它算的，拿別的版本去取那一行
+   * 會算出對不上的 muteKey，靜音就永遠不會生效。
+   */
+  private reviewedSource(filePath: string): string | undefined {
+    return this.lastSource.get(filePath) ?? this.documents.get(filePath)?.getText();
+  }
 
-  async muteFinding(finding: Finding): Promise<void> {
+  async muteFinding(finding: Finding, filePath: string): Promise<void> {
     const root = this.workspaceRoot;
-    const editor = vscode.window.activeTextEditor;
-    const filePath = editor?.document.uri.fsPath;
-    if (!root || !filePath || !this.mutes) {
+    const source = this.reviewedSource(filePath);
+    if (!root || source === undefined || !this.mutes) {
       return;
     }
-    const source = this.lastSource.get(filePath) ?? editor!.document.getText();
     const lineText = source.split("\n")[finding.line - 1] ?? "";
 
     const reason = await vscode.window.showInputBox({
@@ -621,8 +644,10 @@ class Controller {
       mutedAt: new Date().toISOString(),
     });
 
-    if (editor) {
-      await this.review(editor.document);
+    // 重審剛靜音的那個檔案，不是前景那個。
+    const document = this.documents.get(filePath);
+    if (document) {
+      await this.review(document);
     }
   }
 
@@ -630,19 +655,17 @@ class Controller {
    * 切換釘選。checkbox 的 change 事件勾與不勾都會進來，所以這裡看目前狀態
    * 決定是釘還是取消 —— 使用者取消勾選一則已釘的意見時也要能拿掉。
    */
-  togglePin(finding: Finding): void {
+  togglePin(finding: Finding, filePath: string): void {
     const root = this.workspaceRoot;
-    const editor = vscode.window.activeTextEditor;
-    const filePath = editor?.document.uri.fsPath;
-    if (!root || !filePath) {
+    if (!root) {
       return;
     }
-    const key = pinKey(filePath, finding);
+    const source = this.reviewedSource(filePath) ?? "";
+    const lineText = source.split("\n")[finding.line - 1] ?? "";
+    const key = pinKey(filePath, finding, lineText);
     if (this.pins.has(key)) {
       this.pins.remove(key);
     } else {
-      const source = this.lastSource.get(filePath) ?? editor!.document.getText();
-      const lineText = source.split("\n")[finding.line - 1] ?? "";
       const record: PinnedFinding = {
         key,
         finding,
@@ -758,20 +781,23 @@ class Controller {
   async clearMutes(): Promise<void> {
     const n = this.mutes?.clear() ?? 0;
     void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆本機靜音。`);
+    // 被靜音擋掉的意見要重新出現，得再審一次 —— 面板上的舊結果是套用過
+    // 靜音之後的，清了不重審的話畫面不會有任何變化，看起來像沒生效。
+    const document = vscode.window.activeTextEditor?.document;
+    if (n > 0 && document) {
+      await this.review(document);
+    }
+  }
+
+  /** 清除所有釘選與筆記。與 clearMutes 對稱 —— 否則釘選只進不出。 */
+  clearPins(): void {
+    const n = this.pins.clear();
+    this.panel.setPins(this.pins.all());
+    void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆釘選。`);
   }
 
   dispose(): void {
     this.debouncer.dispose();
-  }
-
-  jumpTo(line: number): void {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-      return;
-    }
-    const pos = new vscode.Position(Math.max(0, line - 1), 0);
-    editor.selection = new vscode.Selection(pos, pos);
-    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
   }
 
   private setStatus(text: string, tooltip: string): void {
@@ -790,13 +816,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let controller: Controller;
   const panel = new FindingsPanel({
-    onJump: (line) => controller.jumpTo(line),
-    onMute: (finding) => void controller.muteFinding(finding),
-    onPin: (finding) => controller.togglePin(finding),
+    onJump: (filePath, line) => void controller.jumpToFile(filePath, line),
+    onMute: (finding, filePath) => void controller.muteFinding(finding, filePath),
+    onPin: (finding, filePath) => controller.togglePin(finding, filePath),
     onUnpin: (key) => controller.unpin(key),
     onJumpTo: (filePath, line) => void controller.jumpToFile(filePath, line),
     onComment: (key, text) => controller.setPinComment(key, text),
-    onCancel: () => controller.cancelReview(),
+    onCancel: (filePath) => controller.cancelReview(filePath),
   });
   // 釘選與筆記存到 workspaceState：專案級、跨重啟保留、不進版控。
   const PIN_KEY = "sensai.pins";
@@ -840,6 +866,8 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.exportFalsePositives(),
     ),
     vscode.commands.registerCommand("sensai.clearLocalMutes", () => controller.clearMutes()),
+    vscode.commands.registerCommand("sensai.clearPins", () => controller.clearPins()),
+    vscode.commands.registerCommand("sensai.cancelReview", () => controller.cancelReview()),
     vscode.commands.registerCommand("sensai.reloadRules", () =>
       controller.reloadProjectFiles(true),
     ),

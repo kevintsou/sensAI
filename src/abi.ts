@@ -70,7 +70,3 @@ export const DEFAULT_ARCH_ID = RISCV_ANDES_V5.id;
 export function archFacts(id: string): ArchFacts {
   return ARCHES.find((a) => a.id === id) ?? RISCV_ANDES_V5;
 }
-
-export function knownArchIds(): string[] {
-  return ARCHES.map((a) => a.id);
-}

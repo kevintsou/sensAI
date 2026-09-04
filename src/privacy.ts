@@ -24,6 +24,13 @@ export function blockedPaths(ctx: ReviewContext, config: ProjectConfig, workspac
 export interface AuditEntry {
   ts: string;
   file: string;
+  /**
+   * 這次請求的結果。
+   *
+   * 失敗的請求同樣要記 —— 送到一半才 500 或逾時的情況下，原始碼已經
+   * 離開這台機器了。稽核日誌在失敗時留白，等於在最需要它的時候沒有記錄。
+   */
+  outcome: "ok" | "failed" | "cancelled";
   headers: number;
   bytes: number;
   endpoint: string;

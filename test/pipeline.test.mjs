@@ -54,41 +54,41 @@ function fakeFs(files, index = {}) {
 
 const opts = { workspaceRoot: ROOT, language: "c", depth: 2, budgetBytes: 100000 };
 
-test("include 解析：相對於引用檔案所在目錄", () => {
+test("include 解析：相對於引用檔案所在目錄", async () => {
   const fa = fakeFs({ "/proj/src/regs.h": "#define A 1" });
-  const ctx = buildContext("/proj/src/main.c", '#include "regs.h"\n', opts, fa);
+  const ctx = await buildContext("/proj/src/main.c", '#include "regs.h"\n', opts, fa);
   assert.deepEqual(
     ctx.headers.map((h) => norm(h.path)),
     ["/proj/src/regs.h"],
   );
 });
 
-test("include 解析：相對路徑找不到時，退回全專案 basename 索引", () => {
+test("include 解析：相對路徑找不到時，退回全專案 basename 索引", async () => {
   // build system 有設 include path，但我們拿不到那份設定的情況。
   const fa = fakeFs({ "/proj/inc/hal.h": "#define HAL 1" }, { "hal.h": ["/proj/inc/hal.h"] });
-  const ctx = buildContext("/proj/src/main.c", '#include "hal.h"\n', opts, fa);
+  const ctx = await buildContext("/proj/src/main.c", '#include "hal.h"\n', opts, fa);
   assert.deepEqual(
     ctx.headers.map((h) => norm(h.path)),
     ["/proj/inc/hal.h"],
   );
 });
 
-test("include 解析：同名 header 多份時取路徑最短的", () => {
+test("include 解析：同名 header 多份時取路徑最短的", async () => {
   const fa = fakeFs(
     { "/proj/a.h": "top", "/proj/vendor/deep/a.h": "deep" },
     { "a.h": ["/proj/vendor/deep/a.h", "/proj/a.h"] },
   );
-  const ctx = buildContext("/proj/src/main.c", '#include "a.h"\n', opts, fa);
+  const ctx = await buildContext("/proj/src/main.c", '#include "a.h"\n', opts, fa);
   assert.equal(norm(ctx.headers[0].path), "/proj/a.h");
 });
 
-test("include 解析：忽略角括號的系統 header", () => {
+test("include 解析：忽略角括號的系統 header", async () => {
   const fa = fakeFs({ "/proj/src/stdint.h": "should not be picked" });
-  const ctx = buildContext("/proj/src/main.c", "#include <stdint.h>\n", opts, fa);
+  const ctx = await buildContext("/proj/src/main.c", "#include <stdint.h>\n", opts, fa);
   assert.equal(ctx.headers.length, 0);
 });
 
-test("include 解析：遞迴到設定的深度為止", () => {
+test("include 解析：遞迴到設定的深度為止", async () => {
   const files = {
     "/proj/src/a.h": '#include "b.h"\n',
     "/proj/src/b.h": '#include "c.h"\n',
@@ -96,55 +96,82 @@ test("include 解析：遞迴到設定的深度為止", () => {
   };
   const source = '#include "a.h"\n';
 
-  const d1 = buildContext("/proj/src/m.c", source, { ...opts, depth: 1 }, fakeFs(files));
+  const d1 = await buildContext("/proj/src/m.c", source, { ...opts, depth: 1 }, fakeFs(files));
   assert.deepEqual(
     d1.headers.map((h) => path.basename(h.path)),
     ["a.h"],
   );
 
-  const d3 = buildContext("/proj/src/m.c", source, { ...opts, depth: 3 }, fakeFs(files));
+  const d3 = await buildContext("/proj/src/m.c", source, { ...opts, depth: 3 }, fakeFs(files));
   assert.deepEqual(
     d3.headers.map((h) => path.basename(h.path)),
     ["a.h", "b.h", "c.h"],
   );
 });
 
-test("include 解析：循環引用不會無限迴圈", () => {
+test("include 解析：循環引用不會無限迴圈", async () => {
   const fa = fakeFs({
     "/proj/a.h": '#include "b.h"\n',
     "/proj/b.h": '#include "a.h"\n',
   });
-  const ctx = buildContext("/proj/m.c", '#include "a.h"\n', { ...opts, depth: 5 }, fa);
+  const ctx = await buildContext("/proj/m.c", '#include "a.h"\n', { ...opts, depth: 5 }, fa);
   assert.equal(ctx.headers.length, 2);
 });
 
-test("include 解析：超過位元組預算就標記截斷", () => {
+test("include 解析：超過位元組預算就標記截斷", async () => {
   const fa = fakeFs({ "/proj/big.h": "x".repeat(5000) });
-  const ctx = buildContext("/proj/m.c", '#include "big.h"\n', { ...opts, budgetBytes: 100 }, fa);
+  const ctx = await buildContext("/proj/m.c", '#include "big.h"\n', { ...opts, budgetBytes: 100 }, fa);
   assert.equal(ctx.headers.length, 0);
   assert.equal(ctx.truncated, true);
 });
 
-test("header 索引跨呼叫快取，直到 invalidateIndex 才重建", () => {
+test("header 索引跨呼叫快取，直到 invalidateIndex 才重建", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-idx-"));
   fs.writeFileSync(path.join(dir, "a.h"), "#define A 1");
   const fa = realFileAccess(dir);
 
-  const first = fa.headerIndex();
+  const first = await fa.headerIndex();
   // 索引建好後，記憶體裡是同一個 Map 參考 —— 沒有每次都重掃整棵樹。
-  assert.strictEqual(fa.headerIndex(), first);
+  assert.strictEqual(await fa.headerIndex(), first);
 
   // 新增一個 header，但還沒 invalidate：舊索引不該看到它。
   fs.writeFileSync(path.join(dir, "b.h"), "#define B 1");
-  assert.strictEqual(fa.headerIndex(), first);
+  assert.strictEqual(await fa.headerIndex(), first);
   assert.equal(first.has("b.h"), false);
 
   // invalidate 後重建，才看得到新檔，而且是新的 Map。
   fa.invalidateIndex();
-  const rebuilt = fa.headerIndex();
+  const rebuilt = await fa.headerIndex();
   assert.notStrictEqual(rebuilt, first);
   assert.equal(rebuilt.has("a.h"), true);
   assert.equal(rebuilt.has("b.h"), true);
+});
+
+test("並行呼叫 headerIndex 只走一趟樹", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-idx2-"));
+  fs.writeFileSync(path.join(dir, "a.h"), "#define A 1");
+  const fa = realFileAccess(dir);
+  // 兩個 review 同時開始時，不該各自掃一遍。
+  const [x, y] = await Promise.all([fa.headerIndex(), fa.headerIndex()]);
+  assert.strictEqual(x, y);
+});
+
+test("索引達到上限時會出聲，不會靜默給出殘缺的索引", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-cap-"));
+  // 上限是在「每個目錄開始前」檢查的，所以要多個目錄才觸發得到 ——
+  // 單一目錄無論多大都會一次讀完。真實的風險是目錄多，不是單一目錄大。
+  for (let i = 0; i < 20; i++) {
+    const sub = path.join(dir, `mod${i}`);
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, `h${i}.h`), "x");
+  }
+  const warnings = [];
+  // 用一個小得離譜的上限逼出截斷路徑；正式值是 MAX_INDEX_ENTRIES。
+  const fa = realFileAccess(dir, (m) => warnings.push(m), 5);
+  const idx = await fa.headerIndex();
+  assert.ok(idx.size < 20, `應該只索引到一部分，實際 ${idx.size}`);
+  assert.equal(warnings.length, 1, "截斷一定要留下訊息");
+  assert.match(warnings[0], /索引不完整/);
 });
 
 const FUNC_SRC = [
@@ -411,9 +438,9 @@ test("依副檔名判斷語言，不依賴 languageId", () => {
   assert.equal(detectLanguage("/p/Makefile"), null);
 });
 
-test("include 解析：支援 GAS 的 .include 指令", () => {
+test("include 解析：支援 GAS 的 .include 指令", async () => {
   const fa = fakeFs({ "/proj/src/soc_defs.inc": ".equ BASE, 0x40001000" });
-  const ctx = buildContext(
+  const ctx = await buildContext(
     "/proj/src/boot.s",
     '    .include "soc_defs.inc"\n',
     { ...opts, language: "asm" },
@@ -426,9 +453,9 @@ test("include 解析：支援 GAS 的 .include 指令", () => {
   assert.equal(ctx.language, "asm");
 });
 
-test("include 解析：.S 走前處理器，#include 也要收", () => {
+test("include 解析：.S 走前處理器，#include 也要收", async () => {
   const fa = fakeFs({ "/proj/src/regs.h": "#define A 1" });
-  const ctx = buildContext(
+  const ctx = await buildContext(
     "/proj/src/vectors.S",
     '#include "regs.h"\n',
     { ...opts, language: "asm" },
@@ -1037,7 +1064,7 @@ function fakeBacking(initial = []) {
 function pinRecord(over = {}) {
   const f = finding(over.finding ?? {});
   return {
-    key: over.key ?? pinKey(over.filePath ?? "/proj/a.c", f),
+    key: over.key ?? pinKey(over.filePath ?? "/proj/a.c", f, over.lineText ?? ""),
     finding: f,
     file: over.file ?? "a.c",
     filePath: over.filePath ?? "/proj/a.c",
@@ -1047,16 +1074,23 @@ function pinRecord(over = {}) {
   };
 }
 
-test("pinKey 不受那一行程式碼影響 —— 釘選的筆記不該因為改了程式碼而消失", () => {
+test("pinKey 不含行號 —— 在上方插入一行不該讓釘選失聯", () => {
   const f = finding({ line: 3, rule_id: "volatile-shared-state", message: "訊息" });
-  // 跟 muteKey 相反：muteKey 綁 lineText，pinKey 不綁。
-  const k = pinKey("/proj/a.c", f);
-  assert.equal(pinKey("/proj/a.c", { ...f }), k);
-  // 檔案不同、行號不同、訊息不同、規則不同都會是不同的 key。
-  assert.notEqual(pinKey("/proj/b.c", f), k);
-  assert.notEqual(pinKey("/proj/a.c", { ...f, line: 4 }), k);
-  assert.notEqual(pinKey("/proj/a.c", { ...f, message: "別的" }), k);
-  assert.notEqual(pinKey("/proj/a.c", { ...f, rule_id: "other" }), k);
+  const code = "static uint32_t rx_ready;";
+  const k = pinKey("/proj/a.c", f, code);
+
+  // 這是這個 key 存在的理由：上方增刪造成行號位移，識別要維持不變，
+  // 否則勾選框會顯示未釘、再點一次就多一筆重複的釘選。
+  assert.equal(pinKey("/proj/a.c", { ...f, line: 4 }, code), k);
+  assert.equal(pinKey("/proj/a.c", { ...f, line: 99 }, code), k);
+  // 排版正規化，縮排改了不算變。
+  assert.equal(pinKey("/proj/a.c", f, "  static  uint32_t   rx_ready;"), k);
+
+  // 檔案、訊息、規則、那一行的實際內容不同，就是不同的意見。
+  assert.notEqual(pinKey("/proj/b.c", f, code), k);
+  assert.notEqual(pinKey("/proj/a.c", { ...f, message: "別的" }, code), k);
+  assert.notEqual(pinKey("/proj/a.c", { ...f, rule_id: "other" }, code), k);
+  assert.notEqual(pinKey("/proj/a.c", f, "static volatile uint32_t rx_ready;"), k);
 });
 
 test("釘選：add / has / remove 與持久化", () => {
@@ -1108,4 +1142,84 @@ test("釘選：clear 全清並回報數量", () => {
   store.add(pinRecord({ key: "k2" }));
   assert.equal(store.clear(), 2);
   assert.equal(store.all().length, 0);
+});
+
+/* ------------------------------------------- git 改動範圍（真的建 repo 跑） */
+
+import { changedRanges } from "../out/diff.js";
+import { appendAudit } from "../out/privacy.js";
+import { execFileSync } from "node:child_process";
+
+function tempRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-git-"));
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: dir, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "t");
+  return { dir, git };
+}
+
+test("changedRanges：已追蹤且有改動 → 回傳改動的行範圍", async () => {
+  const { dir, git } = tempRepo();
+  const file = path.join(dir, "a.c");
+  fs.writeFileSync(file, "int a;\nint b;\nint c;\n");
+  git("add", "a.c");
+  git("commit", "-qm", "init");
+
+  fs.writeFileSync(file, "int a;\nint CHANGED;\nint c;\n");
+  assert.deepEqual(await changedRanges(file, dir), [{ start: 2, end: 2 }]);
+});
+
+test("changedRanges：已追蹤但沒有改動 → 空陣列（不是 null）", async () => {
+  const { dir, git } = tempRepo();
+  const file = path.join(dir, "a.c");
+  fs.writeFileSync(file, "int a;\n");
+  git("add", "a.c");
+  git("commit", "-qm", "init");
+
+  // 空陣列與 null 的處置完全相反：空陣列是「存檔不必審」，
+  // null 是「無法判定，照樣審整份」。合併 git 呼叫時最容易弄丟這個區分。
+  assert.deepEqual(await changedRanges(file, dir), []);
+});
+
+test("changedRanges：未追蹤的檔案 → null，不是空陣列", async () => {
+  const { dir } = tempRepo();
+  const file = path.join(dir, "untracked.c");
+  fs.writeFileSync(file, "int a;\n");
+  assert.equal(await changedRanges(file, dir), null);
+});
+
+test("changedRanges：不是 git repo → null", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-nogit-"));
+  const file = path.join(dir, "a.c");
+  fs.writeFileSync(file, "int a;\n");
+  assert.equal(await changedRanges(file, dir), null);
+});
+
+/* ------------------------------------------------------------------ 稽核 */
+
+test("稽核：失敗的請求同樣留下記錄", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-audit-"));
+  const config = { privacy: { neverSend: [], auditLog: "audit.log" }, assemblyArch: "riscv32-andes-v5" };
+  const base = {
+    ts: new Date().toISOString(), file: "src/a.c", headers: 1, bytes: 100,
+    endpoint: "http://127.0.0.1:3456", model: "m", findings: 0, dropped: 0, durationMs: 5,
+  };
+  appendAudit(dir, config, { ...base, outcome: "ok", findings: 2 });
+  appendAudit(dir, config, { ...base, outcome: "failed" });
+  appendAudit(dir, config, { ...base, outcome: "cancelled" });
+
+  const lines = fs.readFileSync(path.join(dir, "audit.log"), "utf8").trim().split("\n");
+  assert.equal(lines.length, 3, "三次都要有記錄 —— 失敗時留白等於在最需要的時候沒有記錄");
+  assert.deepEqual(lines.map((l) => JSON.parse(l).outcome), ["ok", "failed", "cancelled"]);
+});
+
+test("稽核：沒有設定 audit_log 就不寫檔", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sensai-audit2-"));
+  appendAudit(dir, { privacy: { neverSend: [], auditLog: null }, assemblyArch: "x" }, {
+    ts: "", outcome: "ok", file: "a.c", headers: 0, bytes: 0,
+    endpoint: "", model: "", findings: 0, dropped: 0, durationMs: 0,
+  });
+  assert.equal(fs.readdirSync(dir).length, 0);
 });

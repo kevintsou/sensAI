@@ -52,7 +52,7 @@ export class EndpointUnavailableError extends Error {
 const FINDINGS_TOOL: Anthropic.Tool = {
   name: "report_findings",
   description:
-    "回報在受審查的 C 檔案中發現的問題。沒有發現問題時，傳入空陣列。" +
+    "回報在受審查的檔案中發現的問題。沒有發現問題時，傳入空陣列。" +
     "每則意見都必須說明具體的觸發情境與後果；說不出來的就不要回報。",
   input_schema: {
     type: "object",

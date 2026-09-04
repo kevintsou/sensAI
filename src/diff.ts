@@ -119,18 +119,30 @@ export function describeRanges(ranges: LineRange[]): string {
  * 的範圍完全相同，跑兩次只是浪費，呼叫端會退回單階段。
  */
 export async function changedRanges(filePath: string, cwd: string): Promise<ChangedRanges> {
-  try {
-    await run("git", ["ls-files", "--error-unmatch", "--", filePath], { cwd });
-  } catch {
-    return null; // 未追蹤，或這裡不是 git repo
-  }
+  // 先跑 diff。有輸出就代表這個檔案一定有被追蹤，可以省掉 ls-files ——
+  // 而「有改動」正是常見的情況，也是唯一需要繼續往下算的情況。
+  let diff: string;
   try {
     const { stdout } = await run(
       "git",
       ["diff", "-U0", "--no-color", "HEAD", "--", filePath],
       { cwd, maxBuffer: 10 * 1024 * 1024 },
     );
-    return parseDiffRanges(stdout);
+    diff = stdout;
+  } catch {
+    return null; // 不是 git repo，或 git 執行失敗
+  }
+
+  const ranges = parseDiffRanges(diff);
+  if (ranges.length > 0) {
+    return ranges;
+  }
+
+  // diff 是空的：可能是「沒有改動」，也可能是「未追蹤」（未追蹤的檔案
+  // diff 一樣沒有輸出）。這兩者的處置完全相反，所以這時候才需要問一次。
+  try {
+    await run("git", ["ls-files", "--error-unmatch", "--", filePath], { cwd });
+    return [];
   } catch {
     return null;
   }

@@ -125,7 +125,7 @@ async function main() {
   }
 
   const source = fs.readFileSync(filePath, "utf8");
-  const ctx = buildContext(filePath, source, {
+  const ctx = await buildContext(filePath, source, {
     workspaceRoot: root,
     language,
     depth: 2,
@@ -274,7 +274,7 @@ async function main() {
           (stagedSummary.outOfScope > 0
             ? `（另有 ${stagedSummary.outOfScope} 則超出改動範圍被擋下）`
             : "") +
-          `\n  階段二（整份）  ${stagedSummary.stage2} 則\n` +
+          `\n  階段二（${opts.wholeFile ? "整份檔案" : "改動所在的函式"}）  ${stagedSummary.stage2} 則\n` +
           `  重複            ${stagedSummary.duplicates} 則，已合併\n` +
           `  合併後          ${stagedSummary.merged} 則`,
       ),

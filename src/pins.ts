@@ -2,17 +2,25 @@ import * as crypto from "crypto";
 import { Finding, PinnedFinding } from "./types";
 
 /**
- * 釘選的 key 綁在「檔案 + 規則 + 訊息 + 行號」上，**不**綁那一行的程式碼。
+ * 釘選的 key 綁在「檔案 + 規則 + 訊息 + 那一行的內容」上，**不**綁行號。
  *
- * 這是跟 muteKey 刻意的差異。靜音的語意是「這個判斷在這段程式碼上是誤報」，
- * 程式碼一改就該重看，所以 key 含 lineText。釘選的語意是「我要留著這則意見
- * 和我寫的筆記」—— 使用者的 note 不該因為之後改了那行程式碼就無聲消失。
- * 所以這裡用穩定的內容識別，跟原始碼當下的樣子無關。
+ * 行號不能算進去：在被釘的那行上方插入或刪除任何一行，行號就位移，key 跟著變，
+ * 同一則意見會被當成沒釘過 —— 勾選框顯示未釘，再點一次就多出一筆重複的釘選。
+ * 而編輯上方的程式碼是再平常不過的事。
+ *
+ * 改用那一行的內容當識別：上方怎麼增刪都不影響，而同一個檔案裡兩則規則與訊息
+ * 都相同、只是位置不同的意見，也還能靠各自的程式碼區分開來。
+ *
+ * 跟 muteKey 的差別在於這裡不含行號、muteKey 也不含檔案路徑 —— 兩者的語意本來
+ * 就不同：靜音是「這個判斷在這段程式碼上是誤報」，釘選是「我要留著這則意見和
+ * 我寫的筆記」。至於已經釘住的記錄，不會因為那行程式碼被改動而消失：記錄本身
+ * 連同筆記都存著，照樣列在釘選區，只是不再與新一輪的同一則意見自動對應。
  */
-export function pinKey(filePath: string, f: Finding): string {
+export function pinKey(filePath: string, f: Finding, lineText: string): string {
+  const normalized = lineText.trim().replace(/\s+/g, " ");
   return crypto
     .createHash("sha1")
-    .update([filePath, f.rule_id ?? "", f.message, String(f.line)].join("\u0000"))
+    .update([filePath, f.rule_id ?? "", f.message, normalized].join("\u0000"))
     .digest("hex");
 }
 

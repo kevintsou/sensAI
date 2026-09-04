@@ -62,6 +62,14 @@
       {
         "command": "sensai.reloadRules",
         "title": "sensAI: Reload Rules"
+      },
+      {
+        "command": "sensai.cancelReview",
+        "title": "sensAI: Cancel Review"
+      },
+      {
+        "command": "sensai.clearPins",
+        "title": "sensAI: Clear Pinned Findings"
       }
     ],
     "menus": {

@@ -37,6 +37,14 @@ export interface DroppedFinding {
 
 export interface ReviewResult {
   filePath: string;
+  /**
+   * 審查當下的原始碼，逐行拆好。
+   *
+   * 面板要用它算釘選的 key —— key 綁那一行的內容，而「那一行」必須是產生
+   * 這些意見時的版本，不是使用者現在編輯器裡的版本，否則跟 Controller 存的
+   * 版本對不起來。
+   */
+  sourceLines: string[];
   findings: Finding[];
   dropped: DroppedFinding[];
   durationMs: number;
