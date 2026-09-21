@@ -1,6 +1,6 @@
 # 主管簡報
 
-`docs/sensAI_報告.pptx`（16:9，12 頁）的產生原始碼。
+`docs/sensAI_報告.pptx`（16:9，13 頁）的產生原始碼。
 
 ## 重新產生
 
@@ -25,8 +25,9 @@ python3 docs/slides/build.py
 | 8 | 實戰驗證：真實專案的真實缺陷 |
 | 9 | 資安與治理 |
 | 10 | 目前進度與已知限制 |
-| 11 | 如何驗證效益：採納率與指標分層 |
-| 12 | 下一步與所需支援 |
+| 11 | 目前已有的數據與出處 |
+| 12 | 如何驗證效益：採納率與指標分層 |
+| 13 | 下一步與所需支援 |
 
 ## 圖片素材
 
@@ -37,8 +38,9 @@ chromium --headless --hide-scrollbars --force-device-scale-factor=2 \
   --window-size=1562,642 --screenshot=assets/real.png assets/real.html
 ```
 
-- `panel.html` / `panel.png` —— 範例檔 `examples/uart_dma.c` 的審查畫面。版面與樣式
-  取自 `src/panel.ts`，意見內容對應 `examples/uart_dma.c` 檔尾列出的預期結果。
+- `panel.html` / `panel.png` —— 範例檔 `examples/uart_dma.c` 的審查畫面**示意圖**。
+  版面與樣式取自 `src/panel.ts`，意見內容對應 `examples/uart_dma.c` 檔尾列出的預期
+  結果，中繼列的數字（6 則意見、3 個 header、8.4s）為示意，非實機量測值。
 - `rules.html` / `rules.png` —— `.sensai/rules.yaml` 的編輯器畫面。
 - `real.html` / `real.png` —— ps5032 專案 `phal_sys.c` 的實際審查結果重繪。
   數字（1 則意見、18 個 header、65.9s）與意見全文取自實機截圖。
@@ -54,4 +56,4 @@ chromium --headless --hide-scrollbars --force-device-scale-factor=2 \
 | 10 條規則（error 8 / warning 2） | `.sensai/rules.yaml` |
 | 2 組 ABI | `src/abi.ts`（riscv32-andes-v5、armv7e-m） |
 | 去抖動 1,000 ms／120 KB／深度 2 | `package.json` 的 `contributes.configuration` 預設值 |
-| 65.9s / 18 header / 7 個月 | ps5032 專案 `phal_sys.c` 的實機審查 |
+| 65.9s / 18 header / 7 個月 | ps5032 專案 `phal_sys.c` 的實機審查（n=1） |

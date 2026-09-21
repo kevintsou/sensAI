@@ -317,7 +317,7 @@ for i, (t, b) in enumerate([
 s = new("DEMO", "實機畫面：存檔即審查", 7)
 pic(s, os.path.join(SHOTS, "panel.png"), Inches(0.62), Inches(1.78), w=Inches(8.3))
 caption(s, Inches(0.62), Inches(6.82), Inches(8.3),
-        "實機畫面：範例檔 uart_dma.c —— 存檔後自動審查，6 則意見、附帶 3 個 header、8.4 秒")
+        "版面示意：以 src/panel.ts 的實際樣式重繪，意見內容取自 examples/uart_dma.c 檔尾列出的預期結果")
 bullets(s, Inches(9.5), Inches(1.78), Inches(3.25), [
     ("左：編輯器", "行號、程式碼原封不動 —— 不覆寫、不自動修改。"),
     ("右：sensAI 側欄", "檔名、意見數、附帶 header 數、耗時、濾除數、產出時間，一行交代完。"),
@@ -399,8 +399,90 @@ for t in ["多根工作區目前只讀取第一個資料夾",
           "尚未累積足夠樣本計算「意見被實際修掉的比例」"]:
     para(tf, "・" + t, size=13, color=GREY, space_after=6, line=1.2)
 
-# ───────────────────────────────── 11 效益驗證
-s = new("MEASUREMENT", "如何驗證效益：量採納率，不量準確率", 11)
+# ───────────────────────────────── 11 已有數據
+s = new("DATA", "目前已有的數據與出處", 11)
+tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
+para(tf, "以下每個數字都可當場複查。現場使用數據（採納率、延遲分布、成本）要等導入後"
+         "由稽核日誌自動累積 —— 今天還沒有。",
+     size=14, color=DARK, first=True, space_after=0, line=1.25)
+
+
+def drow(slide, x, y, w, item, value, source, alt=False):
+    """三欄資料列：項目／數值／出處。"""
+    if alt:
+        rect(slide, x, y, w, Inches(0.34), fill=LIGHT)
+    tf = tb(slide, x + Inches(0.14), y + Inches(0.07), Inches(1.72), Inches(0.24))
+    para(tf, item, size=11.5, color=DARK, first=True, space_after=0)
+    tf = tb(slide, x + Inches(1.92), y + Inches(0.06), Inches(2.08), Inches(0.24))
+    para(tf, value, size=12, color=NAVY, bold=True, first=True, space_after=0)
+    tf = tb(slide, x + Inches(4.06), y + Inches(0.08), Inches(1.72), Inches(0.24))
+    para(tf, source, size=10, color=GREY, first=True, space_after=0, font=MONO)
+
+
+def dhead(slide, x, y, w, text, col=TEAL):
+    rect(slide, x, y, Emu(34290), Inches(0.26), fill=col)
+    tf = tb(slide, x + Inches(0.14), y + Inches(0.02), w, Inches(0.24))
+    para(tf, text, size=11.5, color=col, bold=True, first=True, space_after=0)
+
+
+LX, RX, CW = Inches(0.62), Inches(6.84), Inches(5.88)
+
+# 左欄：產品規模與規則庫
+dhead(s, LX, Inches(2.32), CW, "產品規模與品質")
+y = Inches(2.66)
+for i, (a, b, c) in enumerate([
+        ("程式碼規模", "3,603 行 ／ 19 個模組", "wc -l src/*.ts"),
+        ("測試", "96 項，全數通過", "npm test"),
+        ("開發期間", "14 天 ／ 45 次提交", "git log"),
+        ("目前版本", "v0.5.1", "package.json")]):
+    drow(s, LX, y, CW, a, b, c, alt=(i % 2 == 0))
+    y = y + Inches(0.34)
+
+dhead(s, LX, y + Inches(0.14), CW, "規則與知識庫")
+y = y + Inches(0.48)
+for i, (a, b, c) in enumerate([
+        ("團隊規則", "10 條（error 8／warning 2）", ".sensai/rules.yaml"),
+        ("架構 ABI 事實", "2 組（Andes V5／ARMv7E-M）", "src/abi.ts")]):
+    drow(s, LX, y, CW, a, b, c, alt=(i % 2 == 0))
+    y = y + Inches(0.34)
+
+dhead(s, LX, y + Inches(0.14), CW, "運作參數（預設值）")
+y = y + Inches(0.48)
+for i, (a, b, c) in enumerate([
+        ("存檔去抖動", "1,000 ms", "sensai.debounceMs"),
+        ("上下文上限", "120 KB ／ include 深度 2", "sensai.includeDepth")]):
+    drow(s, LX, y, CW, a, b, c, alt=(i % 2 == 0))
+    y = y + Inches(0.34)
+
+# 右欄：實際執行觀測
+dhead(s, RX, Inches(2.32), CW, "實際執行觀測（樣本數 n＝1）", col=AMBER)
+y = Inches(2.66)
+for i, (a, b, c) in enumerate([
+        ("單檔審查耗時", "65.9 秒", "phal_sys.c 實機"),
+        ("附帶 header", "18 個（上下文已截斷）", "同上"),
+        ("產生意見", "1 則 error，無誤報", "同上"),
+        ("命中缺陷潛伏", "7 個月", "git blame")]):
+    drow(s, RX, y, CW, a, b, c, alt=(i % 2 == 0))
+    y = y + Inches(0.34)
+
+rect(s, RX, Inches(4.22), CW, Inches(2.0), fill=LIGHT)
+tf = tb(s, RX + Inches(0.3), Inches(4.42), CW - Inches(0.6), Inches(1.7))
+para(tf, "為什麼右欄只有一筆", size=13, color=NAVY, bold=True, first=True, space_after=7)
+para(tf, "稽核日誌（.sensai/sent.log）只在擴充於 VS Code 實際執行時才寫入，"
+         "命令列工具不寫。目前僅有一次實機審查的觀測記錄。",
+     size=11.5, color=DARK, space_after=8, line=1.25)
+para(tf, "導入後每次請求會自動記一筆，含 ts、file、outcome、headers、bytes、"
+         "findings、dropped、durationMs —— 屆時右欄可由單點改為分布，"
+         "覆蓋率、意見密度、過濾效果與成本也一併算得出來。",
+     size=11.5, color=GREY, space_after=0, line=1.25)
+
+tf = tb(s, Inches(0.62), Inches(6.5), Inches(12.1), Inches(0.3))
+para(tf, "※ n＝1 的觀測不能拿來推論平均值。本頁左欄是可驗證的計數，右欄是單次觀測 —— "
+         "兩者的證據強度不同，報告時分開看。",
+     size=11, color=GREY, first=True, space_after=0)
+
+# ───────────────────────────────── 12 效益驗證
+s = new("MEASUREMENT", "如何驗證效益：量採納率，不量準確率", 12)
 tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
 para(tf, "「準確率」需要知道程式碼裡到底有幾個 bug —— 那個答案永遠不存在，"
          "任何宣稱的準確率都是自己跟自己比。改量使用者用行動投票的結果。",
@@ -454,7 +536,7 @@ para(tf, "試行 4 週的報告格式：「n 則意見被實際修掉，其中 m
      size=13, color=WHITE, bold=True, first=True, space_after=0)
 
 # ───────────────────────────────── 12 下一步
-s = new("NEXT", "下一步與所需支援", 12)
+s = new("NEXT", "下一步與所需支援", 13)
 tf = tb(s, Inches(0.62), Inches(1.8), Inches(12.1), Inches(0.35))
 para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，再決定是否推廣。",
      size=15, color=DARK, first=True, space_after=0)
