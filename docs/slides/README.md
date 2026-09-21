@@ -26,7 +26,7 @@ python3 docs/slides/build.py
 | 9 | 資安與治理 |
 | 10 | 目前進度與已知限制 |
 | 11 | 目前已有的數據與出處 |
-| 12 | 如何驗證效益：以使用次數為核心指標 |
+| 12 | 部署狀況：已安裝台數 |
 | 13 | 下一步與所需支援 |
 
 ## 圖片素材
@@ -57,3 +57,4 @@ chromium --headless --hide-scrollbars --force-device-scale-factor=2 \
 | 2 組 ABI | `src/abi.ts`（riscv32-andes-v5、armv7e-m） |
 | 去抖動 1,000 ms／120 KB／深度 2 | `package.json` 的 `contributes.configuration` 預設值 |
 | 65.9s / 18 header / 7 個月 | ps5032 專案 `phal_sys.c` 的實機審查（n=1） |
+| 8 台 | VS Code 擴充詳細頁顯示的安裝數 |

@@ -481,69 +481,72 @@ para(tf, "※ n＝1 的觀測不能拿來推論平均值。本頁左欄是可驗
          "兩者的證據強度不同，報告時分開看。",
      size=11, color=GREY, first=True, space_after=0)
 
-# ───────────────────────────────── 12 效益驗證
-s = new("MEASUREMENT", "如何驗證效益：以使用次數為核心指標", 12)
+# ───────────────────────────────── 12 部署狀況
+s = new("DEPLOYMENT", "部署狀況：已安裝 8 台開發機", 12)
 tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
-para(tf, "使用次數今天就量得到 —— 稽核日誌每次請求自動記一筆，不必改程式、不必請人填表。"
-         "但要先拆開看：sensAI 是存檔自動觸發的。",
+para(tf, "sensAI 沒有透過任何統一派送機制推送。這 8 台，是 8 位工程師各自決定安裝的結果。",
      size=14, color=DARK, first=True, space_after=0, line=1.25)
 
-# 左：使用次數的五個切面
-rect(s, Inches(0.62), Inches(2.3), Inches(6.55), Inches(3.62), fill=None, line_col=LINE)
-tf = tb(s, Inches(0.92), Inches(2.5), Inches(6.0), Inches(0.35))
-para(tf, "使用次數的五個切面", size=13, color=TEAL, bold=True, first=True, space_after=0)
+# 左：主數字
+rect(s, Inches(0.62), Inches(2.3), Inches(3.62), Inches(3.62), fill=NAVY)
+tf = tb(s, Inches(0.92), Inches(2.72), Inches(3.0), Inches(1.5), align=PP_ALIGN.CENTER)
+para(tf, "8", size=96, color=WHITE, bold=True, first=True, space_after=0,
+     align=PP_ALIGN.CENTER)
+rect(s, Inches(1.62), Inches(4.22), Inches(1.6), Emu(22860), fill=TEAL)
+tf = tb(s, Inches(0.92), Inches(4.5), Inches(3.0), Inches(1.2), align=PP_ALIGN.CENTER)
+para(tf, "台開發機已安裝", size=17, color=WHITE, bold=True, first=True, space_after=8,
+     align=PP_ALIGN.CENTER)
+para(tf, "來源：VS Code 擴充頁安裝數\n（可於擴充詳細頁當場複查）",
+     size=11, color=RGBColor(0xA8, 0xC4, 0xD8), space_after=0, align=PP_ALIGN.CENTER,
+     line=1.3)
 
-metrics = [
-    ("總審查次數", "每週成功完成的審查筆數", "現成"),
-    ("週活躍人數", "當週有審查記錄的人數", "現成"),
-    ("人均每週次數", "前兩者相除 —— 看的是黏著度", "現成"),
-    ("涵蓋檔案數", "被審過的相異檔案數 ÷ 專案檔案數", "現成"),
-    ("手動觸發佔比", "主動執行 Review Current File 的比例", "待補"),
-]
-y = Inches(2.9)
-for i, (name, desc, avail) in enumerate(metrics):
-    ready = avail == "現成"
-    if i % 2 == 0:
-        rect(s, Inches(0.92), y, Inches(5.95), Inches(0.52), fill=LIGHT)
-    tfx = tb(s, Inches(1.06), y + Inches(0.05), Inches(1.75), Inches(0.42))
-    para(tfx, name, size=12.5, color=NAVY, bold=True, first=True, space_after=0)
-    tfx = tb(s, Inches(2.86), y + Inches(0.07), Inches(3.05), Inches(0.42))
-    para(tfx, desc, size=11, color=GREY, first=True, space_after=0, line=1.15)
-    rect(s, Inches(6.05), y + Inches(0.11), Inches(0.72), Inches(0.3),
-         fill=(TEAL if ready else AMBER))
-    tfx = tb(s, Inches(6.05), y + Inches(0.155), Inches(0.72), Inches(0.24),
-             align=PP_ALIGN.CENTER)
-    para(tfx, avail, size=10, color=WHITE, bold=True, first=True, space_after=0,
-         align=PP_ALIGN.CENTER)
-    y = y + Inches(0.56)
+# 中：這個數字的意義
+rect(s, Inches(4.46), Inches(2.3), Inches(4.0), Inches(3.62), fill=None, line_col=LINE)
+tf = tb(s, Inches(4.76), Inches(2.52), Inches(3.4), Inches(3.3))
+para(tf, "這個數字的意義", size=13, color=TEAL, bold=True, first=True, space_after=10)
+for i, (t, b) in enumerate([
+        ("全部為主動安裝",
+         "未納入任何統一派送。每一台都要工程師自己從 Marketplace 裝上去。"),
+        ("零採購成本",
+         "自行開發，無授權費，安裝不需要走採購流程。"),
+        ("零設定門檻",
+         "一個 Initialize Project 指令即建立專案設定，不需要 build system 整合。")]):
+    para(tf, t, size=12.5, color=NAVY, bold=True, space_after=3,
+         space_before=(0 if i == 0 else 12))
+    para(tf, b, size=11, color=GREY, space_after=0, line=1.25)
 
-tf = tb(s, Inches(0.92), Inches(5.76), Inches(6.0), Inches(0.3))
-para(tf, "「現成」＝ .sensai/sent.log 已有欄位，收回日誌直接統計即可。",
-     size=10.5, color=GREY, first=True, space_after=0)
+# 右：部署階梯
+rect(s, Inches(8.68), Inches(2.3), Inches(4.04), Inches(3.62), fill=LIGHT)
+tf = tb(s, Inches(8.98), Inches(2.52), Inches(3.44), Inches(0.35))
+para(tf, "部署進程", size=13, color=TEAL, bold=True, first=True, space_after=0)
+stages = [("開發驗證", "1 台", True),
+          ("目前", "8 台", True),
+          ("試行專案全員", "待展開", False),
+          ("部門推廣", "待評估", False)]
+y = Inches(2.98)
+for name, val, done in stages:
+    col = TEAL if done else RGBColor(0xB0, 0xBC, 0xC8)
+    rect(s, Inches(8.98), y + Inches(0.12), Inches(0.16), Inches(0.16), fill=col,
+         shape=MSO_SHAPE.OVAL)
+    tfx = tb(s, Inches(9.32), y + Inches(0.02), Inches(1.9), Inches(0.35))
+    para(tfx, name, size=12.5, color=(NAVY if done else GREY), bold=done,
+         first=True, space_after=0)
+    tfx = tb(s, Inches(11.3), y + Inches(0.03), Inches(1.15), Inches(0.35),
+             align=PP_ALIGN.RIGHT)
+    para(tfx, val, size=12.5, color=(NAVY if done else GREY), bold=done,
+         first=True, space_after=0, align=PP_ALIGN.RIGHT)
+    y = y + Inches(0.62)
 
-# 右：為什麼要拆開自動與手動
-rect(s, Inches(7.45), Inches(2.3), Inches(5.27), Inches(3.62), fill=LIGHT)
-tf = tb(s, Inches(7.75), Inches(2.52), Inches(4.67), Inches(3.3))
-para(tf, "關鍵：自動與手動要分開算", size=13, color=TEAL, bold=True,
-     first=True, space_after=9)
-para(tf, "自動觸發次數 ≈ 存檔次數", size=12, color=NAVY, bold=True, space_after=3)
-para(tf, "反映的是開發活動頻繁程度，不是工具價值。總次數高，可能只代表那週改的東西多。",
-     size=11, color=DARK, space_after=9, line=1.22)
-para(tf, "手動觸發是主動行為", size=12, color=NAVY, bold=True, space_after=3)
-para(tf, "沒有人會主動執行一個自己不信任的工具。手動佔比逐週上升，代表 sensAI 從背景雜訊"
-         "變成會主動叫出來用的工具。",
-     size=11, color=DARK, space_after=9, line=1.22)
-para(tf, "差距只有一個欄位", size=12, color=AMBER, bold=True, space_after=3)
-para(tf, "trigger 值（manual／save）程式內部已經有，只是沒寫進稽核日誌，補上即可統計。",
-     size=11, color=DARK, space_after=9, line=1.22)
-para(tf, "護欄：使用次數不可單獨當 KPI，須並列 p95 延遲與每人每週誤報數。",
-     size=10.5, color=GREY, space_after=0, line=1.22)
+tf = tb(s, Inches(8.98), Inches(5.56), Inches(3.44), Inches(0.4))
+para(tf, "安裝數不等於活躍台數。每週仍在產生審查記錄的台數，"
+         "需收回稽核日誌後才算得出。",
+     size=10, color=GREY, first=True, space_after=0, line=1.2)
 
 # 底部
 rect(s, Inches(0.62), Inches(6.08), Inches(12.1), Inches(0.68), fill=NAVY)
 tf = tb(s, Inches(0.95), Inches(6.2), Inches(11.5), Inches(0.46))
-para(tf, "試行 4 週的目標設定：週活躍人數、人均每週使用次數、手動觸發佔比逐週上升"
-         "—— 三個數字都來自同一份稽核日誌。",
+para(tf, "下一個里程碑：試行專案全員部署 —— 目標是讓部署台數從「自己找到的人」"
+         "變成「整個專案的標準配備」。",
      size=13, color=WHITE, bold=True, first=True, space_after=0)
 
 # ───────────────────────────────── 13 下一步
@@ -554,8 +557,8 @@ para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，�
 
 phases = [("第 1 階段　試行（4 週）",
            ["指定 1〜2 個專案導入，由專案負責人補齊該專案規則",
-            "追蹤指標：週活躍人數、人均每週使用次數、手動觸發佔比",
-            "資料全部來自稽核日誌，不需要任何人填表"], TEAL),
+            "追蹤指標：部署台數，以及每週仍在產生審查記錄的台數",
+            "目標：試行專案全員部署，成為專案標準配備"], TEAL),
           ("第 2 階段　擴大（試行後評估）",
            ["建立部門共用規則庫（private rules repository）",
             "把踩過的坑轉成規則，讓同一個錯不會被犯第二次",
