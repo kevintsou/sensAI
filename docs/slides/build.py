@@ -399,8 +399,62 @@ for t in ["多根工作區目前只讀取第一個資料夾",
           "尚未累積足夠樣本計算「意見被實際修掉的比例」"]:
     para(tf, "・" + t, size=13, color=GREY, space_after=6, line=1.2)
 
-# ───────────────────────────────── 11 下一步
-s = new("NEXT", "下一步與所需支援", 11)
+# ───────────────────────────────── 11 效益驗證
+s = new("MEASUREMENT", "如何驗證效益：量採納率，不量準確率", 11)
+tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
+para(tf, "「準確率」需要知道程式碼裡到底有幾個 bug —— 那個答案永遠不存在，"
+         "任何宣稱的準確率都是自己跟自己比。改量使用者用行動投票的結果。",
+     size=14, color=DARK, first=True, space_after=0, line=1.25)
+
+# 左：北極星指標
+rect(s, Inches(0.62), Inches(2.3), Inches(5.88), Inches(3.62), fill=LIGHT)
+tf = tb(s, Inches(0.92), Inches(2.5), Inches(5.3), Inches(0.35))
+para(tf, "北極星指標", size=13, color=TEAL, bold=True, first=True, space_after=0)
+rect(s, Inches(0.92), Inches(2.88), Inches(5.28), Inches(0.72), fill=WHITE, line_col=LINE)
+tf = tb(s, Inches(1.05), Inches(3.06), Inches(5.02), Inches(0.4), align=PP_ALIGN.CENTER)
+para(tf, "採納率　＝　被修掉的意見數　÷　提出的意見數",
+     size=15.5, color=NAVY, bold=True, first=True, space_after=0, align=PP_ALIGN.CENTER)
+tf = tb(s, Inches(0.92), Inches(3.82), Inches(5.3), Inches(1.9))
+for i, (t, b) in enumerate([
+        ("為什麼可信",
+         "工程師真的動手改了那行程式碼才算採納。沒有人會為了配合 KPI 去改自己的韌體。"),
+        ("怎麼判定",
+         "比對前後兩輪審查的意見識別碼：消失、且那行程式碼已變動即為已修正。"
+         "全自動，使用者不必按任何按鈕。"),
+        ("要補什麼",
+         "現有稽核日誌記的是「請求」，不是「意見的下場」。需新增一份意見記錄檔與匯出指令。")]):
+    para(tf, t, size=12.5, color=NAVY, bold=True, first=(i == 0),
+         space_after=3, space_before=(0 if i == 0 else 9))
+    para(tf, b, size=11.5, color=GREY, space_after=0, line=1.25)
+
+# 右：指標分層
+rect(s, Inches(6.84), Inches(2.3), Inches(5.88), Inches(3.62), fill=None, line_col=LINE)
+tf = tb(s, Inches(7.14), Inches(2.5), Inches(5.3), Inches(0.35))
+para(tf, "指標分層", size=13, color=TEAL, bold=True, first=True, space_after=0)
+rows = [("北極星", "採納率", "唯一不需要 ground truth 的價值證明", TEAL),
+        ("領先", "每週活躍人數、每人每週採納數", "兩週就看得出趨勢，不必等三個月", NAVY2),
+        ("落後", "規則命中分布、反覆被否決的規則", "指出該補哪一條 except", NAVY2),
+        ("護欄", "p95 延遲、每人每週誤報數", "不准跌破的底線，不是要衝高的目標", AMBER)]
+y = Inches(2.92)
+for tag, metric, why, c in rows:
+    rect(s, Inches(7.14), y, Inches(1.02), Inches(0.62), fill=c)
+    tfx = tb(s, Inches(7.14), y + Inches(0.18), Inches(1.02), Inches(0.3), align=PP_ALIGN.CENTER)
+    para(tfx, tag, size=11.5, color=WHITE, bold=True, first=True, space_after=0,
+         align=PP_ALIGN.CENTER)
+    tfx = tb(s, Inches(8.32), y + Inches(0.04), Inches(4.2), Inches(0.62))
+    para(tfx, metric, size=12.5, color=NAVY, bold=True, first=True, space_after=2)
+    para(tfx, why, size=11, color=GREY, space_after=0, line=1.2)
+    y = y + Inches(0.72)
+
+# 底部：試行與報告方式
+rect(s, Inches(0.62), Inches(6.08), Inches(12.1), Inches(0.68), fill=NAVY)
+tf = tb(s, Inches(0.95), Inches(6.2), Inches(11.5), Inches(0.46))
+para(tf, "試行 4 週的報告格式：「n 則意見被實際修掉，其中 m 則是已合併進主線的既有缺陷」"
+         "—— 比率是佐證，案例才是論點。",
+     size=13, color=WHITE, bold=True, first=True, space_after=0)
+
+# ───────────────────────────────── 12 下一步
+s = new("NEXT", "下一步與所需支援", 12)
 tf = tb(s, Inches(0.62), Inches(1.8), Inches(12.1), Inches(0.35))
 para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，再決定是否推廣。",
      size=15, color=DARK, first=True, space_after=0)
