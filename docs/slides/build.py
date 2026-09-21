@@ -482,60 +482,71 @@ para(tf, "※ n＝1 的觀測不能拿來推論平均值。本頁左欄是可驗
      size=11, color=GREY, first=True, space_after=0)
 
 # ───────────────────────────────── 12 效益驗證
-s = new("MEASUREMENT", "如何驗證效益：量採納率，不量準確率", 12)
+s = new("MEASUREMENT", "如何驗證效益：以使用次數為核心指標", 12)
 tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
-para(tf, "「準確率」需要知道程式碼裡到底有幾個 bug —— 那個答案永遠不存在，"
-         "任何宣稱的準確率都是自己跟自己比。改量使用者用行動投票的結果。",
+para(tf, "使用次數今天就量得到 —— 稽核日誌每次請求自動記一筆，不必改程式、不必請人填表。"
+         "但要先拆開看：sensAI 是存檔自動觸發的。",
      size=14, color=DARK, first=True, space_after=0, line=1.25)
 
-# 左：北極星指標
-rect(s, Inches(0.62), Inches(2.3), Inches(5.88), Inches(3.62), fill=LIGHT)
-tf = tb(s, Inches(0.92), Inches(2.5), Inches(5.3), Inches(0.35))
-para(tf, "北極星指標", size=13, color=TEAL, bold=True, first=True, space_after=0)
-rect(s, Inches(0.92), Inches(2.88), Inches(5.28), Inches(0.72), fill=WHITE, line_col=LINE)
-tf = tb(s, Inches(1.05), Inches(3.06), Inches(5.02), Inches(0.4), align=PP_ALIGN.CENTER)
-para(tf, "採納率　＝　被修掉的意見數　÷　提出的意見數",
-     size=15.5, color=NAVY, bold=True, first=True, space_after=0, align=PP_ALIGN.CENTER)
-tf = tb(s, Inches(0.92), Inches(3.82), Inches(5.3), Inches(1.9))
-for i, (t, b) in enumerate([
-        ("為什麼可信",
-         "工程師真的動手改了那行程式碼才算採納。沒有人會為了配合 KPI 去改自己的韌體。"),
-        ("怎麼判定",
-         "比對前後兩輪審查的意見識別碼：消失、且那行程式碼已變動即為已修正。"
-         "全自動，使用者不必按任何按鈕。"),
-        ("要補什麼",
-         "現有稽核日誌記的是「請求」，不是「意見的下場」。需新增一份意見記錄檔與匯出指令。")]):
-    para(tf, t, size=12.5, color=NAVY, bold=True, first=(i == 0),
-         space_after=3, space_before=(0 if i == 0 else 9))
-    para(tf, b, size=11.5, color=GREY, space_after=0, line=1.25)
+# 左：使用次數的五個切面
+rect(s, Inches(0.62), Inches(2.3), Inches(6.55), Inches(3.62), fill=None, line_col=LINE)
+tf = tb(s, Inches(0.92), Inches(2.5), Inches(6.0), Inches(0.35))
+para(tf, "使用次數的五個切面", size=13, color=TEAL, bold=True, first=True, space_after=0)
 
-# 右：指標分層
-rect(s, Inches(6.84), Inches(2.3), Inches(5.88), Inches(3.62), fill=None, line_col=LINE)
-tf = tb(s, Inches(7.14), Inches(2.5), Inches(5.3), Inches(0.35))
-para(tf, "指標分層", size=13, color=TEAL, bold=True, first=True, space_after=0)
-rows = [("北極星", "採納率", "唯一不需要 ground truth 的價值證明", TEAL),
-        ("領先", "每週活躍人數、每人每週採納數", "兩週就看得出趨勢，不必等三個月", NAVY2),
-        ("落後", "規則命中分布、反覆被否決的規則", "指出該補哪一條 except", NAVY2),
-        ("護欄", "p95 延遲、每人每週誤報數", "不准跌破的底線，不是要衝高的目標", AMBER)]
-y = Inches(2.92)
-for tag, metric, why, c in rows:
-    rect(s, Inches(7.14), y, Inches(1.02), Inches(0.62), fill=c)
-    tfx = tb(s, Inches(7.14), y + Inches(0.18), Inches(1.02), Inches(0.3), align=PP_ALIGN.CENTER)
-    para(tfx, tag, size=11.5, color=WHITE, bold=True, first=True, space_after=0,
+metrics = [
+    ("總審查次數", "每週成功完成的審查筆數", "現成"),
+    ("週活躍人數", "當週有審查記錄的人數", "現成"),
+    ("人均每週次數", "前兩者相除 —— 看的是黏著度", "現成"),
+    ("涵蓋檔案數", "被審過的相異檔案數 ÷ 專案檔案數", "現成"),
+    ("手動觸發佔比", "主動執行 Review Current File 的比例", "待補"),
+]
+y = Inches(2.9)
+for i, (name, desc, avail) in enumerate(metrics):
+    ready = avail == "現成"
+    if i % 2 == 0:
+        rect(s, Inches(0.92), y, Inches(5.95), Inches(0.52), fill=LIGHT)
+    tfx = tb(s, Inches(1.06), y + Inches(0.05), Inches(1.75), Inches(0.42))
+    para(tfx, name, size=12.5, color=NAVY, bold=True, first=True, space_after=0)
+    tfx = tb(s, Inches(2.86), y + Inches(0.07), Inches(3.05), Inches(0.42))
+    para(tfx, desc, size=11, color=GREY, first=True, space_after=0, line=1.15)
+    rect(s, Inches(6.05), y + Inches(0.11), Inches(0.72), Inches(0.3),
+         fill=(TEAL if ready else AMBER))
+    tfx = tb(s, Inches(6.05), y + Inches(0.155), Inches(0.72), Inches(0.24),
+             align=PP_ALIGN.CENTER)
+    para(tfx, avail, size=10, color=WHITE, bold=True, first=True, space_after=0,
          align=PP_ALIGN.CENTER)
-    tfx = tb(s, Inches(8.32), y + Inches(0.04), Inches(4.2), Inches(0.62))
-    para(tfx, metric, size=12.5, color=NAVY, bold=True, first=True, space_after=2)
-    para(tfx, why, size=11, color=GREY, space_after=0, line=1.2)
-    y = y + Inches(0.72)
+    y = y + Inches(0.56)
 
-# 底部：試行與報告方式
+tf = tb(s, Inches(0.92), Inches(5.76), Inches(6.0), Inches(0.3))
+para(tf, "「現成」＝ .sensai/sent.log 已有欄位，收回日誌直接統計即可。",
+     size=10.5, color=GREY, first=True, space_after=0)
+
+# 右：為什麼要拆開自動與手動
+rect(s, Inches(7.45), Inches(2.3), Inches(5.27), Inches(3.62), fill=LIGHT)
+tf = tb(s, Inches(7.75), Inches(2.52), Inches(4.67), Inches(3.3))
+para(tf, "關鍵：自動與手動要分開算", size=13, color=TEAL, bold=True,
+     first=True, space_after=9)
+para(tf, "自動觸發次數 ≈ 存檔次數", size=12, color=NAVY, bold=True, space_after=3)
+para(tf, "反映的是開發活動頻繁程度，不是工具價值。總次數高，可能只代表那週改的東西多。",
+     size=11, color=DARK, space_after=9, line=1.22)
+para(tf, "手動觸發是主動行為", size=12, color=NAVY, bold=True, space_after=3)
+para(tf, "沒有人會主動執行一個自己不信任的工具。手動佔比逐週上升，代表 sensAI 從背景雜訊"
+         "變成會主動叫出來用的工具。",
+     size=11, color=DARK, space_after=9, line=1.22)
+para(tf, "差距只有一個欄位", size=12, color=AMBER, bold=True, space_after=3)
+para(tf, "trigger 值（manual／save）程式內部已經有，只是沒寫進稽核日誌，補上即可統計。",
+     size=11, color=DARK, space_after=9, line=1.22)
+para(tf, "護欄：使用次數不可單獨當 KPI，須並列 p95 延遲與每人每週誤報數。",
+     size=10.5, color=GREY, space_after=0, line=1.22)
+
+# 底部
 rect(s, Inches(0.62), Inches(6.08), Inches(12.1), Inches(0.68), fill=NAVY)
 tf = tb(s, Inches(0.95), Inches(6.2), Inches(11.5), Inches(0.46))
-para(tf, "試行 4 週的報告格式：「n 則意見被實際修掉，其中 m 則是已合併進主線的既有缺陷」"
-         "—— 比率是佐證，案例才是論點。",
+para(tf, "試行 4 週的目標設定：週活躍人數、人均每週使用次數、手動觸發佔比逐週上升"
+         "—— 三個數字都來自同一份稽核日誌。",
      size=13, color=WHITE, bold=True, first=True, space_after=0)
 
-# ───────────────────────────────── 12 下一步
+# ───────────────────────────────── 13 下一步
 s = new("NEXT", "下一步與所需支援", 13)
 tf = tb(s, Inches(0.62), Inches(1.8), Inches(12.1), Inches(0.35))
 para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，再決定是否推廣。",
@@ -543,8 +554,8 @@ para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，�
 
 phases = [("第 1 階段　試行（4 週）",
            ["指定 1〜2 個專案導入，由專案負責人補齊該專案規則",
-            "追蹤指標：意見被實際修掉的比例（而非準確率 —— 準確率沒有 ground truth）",
-            "目標：每位使用者每週至少 1 則被採納的意見"], TEAL),
+            "追蹤指標：週活躍人數、人均每週使用次數、手動觸發佔比",
+            "資料全部來自稽核日誌，不需要任何人填表"], TEAL),
           ("第 2 階段　擴大（試行後評估）",
            ["建立部門共用規則庫（private rules repository）",
             "把踩過的坑轉成規則，讓同一個錯不會被犯第二次",
