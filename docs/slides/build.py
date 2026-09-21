@@ -369,8 +369,85 @@ tf = tb(s, Inches(0.62), Inches(6.78), Inches(12.1), Inches(0.3))
 para(tf, "※ 未設定任何規則時，sensAI 只檢查語法與型別錯誤，不會做其他推論。",
      size=11.5, color=GREY, first=True, space_after=0)
 
-# ───────────────────────────────── 10 進度
-s = new("STATUS", "目前進度：已可使用，非概念驗證", 10)
+# ───────────────────────────────── 10 Token 用量
+s = new("TOKEN FOOTPRINT", "單次審查的實際用量：為什麼適合地端模型", 10)
+tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
+para(tf, "以下 prompt 大小為實際產生後量測（npm run review -- <檔案> --show-prompt），"
+         "非估計值。token 數以程式碼約 3.5〜4 bytes／token 換算。",
+     size=13, color=DARK, first=True, space_after=0, line=1.25)
+
+# 左：實測表
+rect(s, Inches(0.62), Inches(2.3), Inches(6.55), Inches(3.62), fill=None, line_col=LINE)
+tf = tb(s, Inches(0.92), Inches(2.5), Inches(6.0), Inches(0.35))
+para(tf, "單次請求的 prompt 大小（實測）", size=13, color=TEAL, bold=True,
+     first=True, space_after=0)
+
+# 表頭
+tf = tb(s, Inches(1.06), Inches(2.92), Inches(2.9), Inches(0.24))
+para(tf, "情境", size=10.5, color=GREY, bold=True, first=True, space_after=0)
+tf = tb(s, Inches(4.1), Inches(2.92), Inches(1.3), Inches(0.24), align=PP_ALIGN.RIGHT)
+para(tf, "bytes", size=10.5, color=GREY, bold=True, first=True, space_after=0,
+     align=PP_ALIGN.RIGHT)
+tf = tb(s, Inches(5.55), Inches(2.92), Inches(1.3), Inches(0.24), align=PP_ALIGN.RIGHT)
+para(tf, "≈ tokens", size=10.5, color=GREY, bold=True, first=True, space_after=0,
+     align=PP_ALIGN.RIGHT)
+rect(s, Inches(1.06), Inches(3.2), Inches(5.8), Emu(9525), fill=LINE)
+
+rows = [("C 檔（uart_dma.c ＋ 1 header ＋ 10 條規則）", "20,142", "5.0k〜5.8k", False),
+        ("組語檔（uart_dma.s ＋ 內建 ABI 事實）", "12,254", "3.1k〜3.5k", False),
+        ("上下文預算滿載（硬上限）", "145,654", "36k〜42k", True)]
+y = Inches(3.32)
+for i, (name, b, t, hi) in enumerate(rows):
+    if hi:
+        rect(s, Inches(1.06), y - Inches(0.04), Inches(5.8), Inches(0.52), fill=LIGHT)
+    tfx = tb(s, Inches(1.06), y + Inches(0.03), Inches(2.95), Inches(0.44))
+    para(tfx, name, size=11.5, color=(NAVY if hi else DARK), bold=hi,
+         first=True, space_after=0, line=1.18)
+    tfx = tb(s, Inches(4.1), y + Inches(0.05), Inches(1.3), Inches(0.3),
+             align=PP_ALIGN.RIGHT)
+    para(tfx, b, size=12.5, color=(AMBER if hi else NAVY), bold=True, first=True,
+         space_after=0, align=PP_ALIGN.RIGHT)
+    tfx = tb(s, Inches(5.55), y + Inches(0.05), Inches(1.3), Inches(0.3),
+             align=PP_ALIGN.RIGHT)
+    para(tfx, t, size=12.5, color=(AMBER if hi else NAVY), bold=True, first=True,
+         space_after=0, align=PP_ALIGN.RIGHT)
+    y = y + Inches(0.6)
+
+rect(s, Inches(1.06), Inches(5.18), Inches(5.8), Inches(0.62), fill=NAVY)
+tf = tb(s, Inches(1.26), Inches(5.3), Inches(5.4), Inches(0.42))
+para(tf, "每次審查送出 1〜2 個請求（兩階段）；連續存檔期間降為 1 個。",
+     size=12, color=WHITE, bold=True, first=True, space_after=0, line=1.2)
+
+# 右：地端模型論點
+rect(s, Inches(7.45), Inches(2.3), Inches(5.27), Inches(3.62), fill=LIGHT)
+tf = tb(s, Inches(7.75), Inches(2.52), Inches(4.67), Inches(3.3))
+para(tf, "為什麼這個形狀適合地端模型", size=13, color=TEAL, bold=True,
+     first=True, space_after=10)
+for i, (t, b) in enumerate([
+        ("上界是設定值，不是期望值",
+         "contextBudgetBytes 預設 120 KB 是硬上限，超過就截斷。單次請求的最大值"
+         "可事先算出 —— 地端 GPU 的 context window 與顯存據此規劃即可。"),
+        ("單輪請求，沒有 agentic 迴圈",
+         "一次請求換一個回答。沒有 tool use 多輪探索把 token 一層層疊上去，"
+         "也就沒有「這次特別貴」的意外。"),
+        ("不做全庫檢索",
+         "只帶當前檔案與它 #include 到的專案 header。不需要向量資料庫、"
+         "不需要全庫索引、不需要 build system 整合。"),
+        ("負載隨存檔次數成長，不隨 repo 大小成長",
+         "百萬行的專案與一萬行的專案，單次請求大小相同。容量規劃因此可行。")]):
+    para(tf, t, size=12, color=NAVY, bold=True, space_after=3,
+         space_before=(0 if i == 0 else 9))
+    para(tf, b, size=10.5, color=DARK, space_after=0, line=1.22)
+
+# 底部
+rect(s, Inches(0.62), Inches(6.08), Inches(12.1), Inches(0.68), fill=NAVY)
+tf = tb(s, Inches(0.95), Inches(6.2), Inches(11.5), Inches(0.46))
+para(tf, "地端模型的前提是「用量可預測」。sensAI 的用量由設定值決定上界，"
+         "不由程式碼庫規模或模型的探索意願決定。",
+     size=13, color=WHITE, bold=True, first=True, space_after=0)
+
+# ───────────────────────────────── 11 進度
+s = new("STATUS", "目前進度：已可使用，非概念驗證", 11)
 stat(s, Inches(0.62), Inches(1.78), Inches(2.9), "14 天", "從構想到可用版本",
      "2026/08/22 → 09/04　45 次提交")
 stat(s, Inches(3.72), Inches(1.78), Inches(2.9), "3,603 行", "TypeScript　19 個模組",
@@ -399,8 +476,8 @@ for t in ["多根工作區目前只讀取第一個資料夾",
           "尚未累積足夠樣本計算「意見被實際修掉的比例」"]:
     para(tf, "・" + t, size=13, color=GREY, space_after=6, line=1.2)
 
-# ───────────────────────────────── 11 已有數據
-s = new("DATA", "目前已有的數據與出處", 11)
+# ───────────────────────────────── 12 已有數據
+s = new("DATA", "目前已有的數據與出處", 12)
 tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
 para(tf, "以下每個數字都可當場複查。現場使用數據（採納率、延遲分布、成本）要等導入後"
          "由稽核日誌自動累積 —— 今天還沒有。",
@@ -481,8 +558,8 @@ para(tf, "※ n＝1 的觀測不能拿來推論平均值。本頁左欄是可驗
          "兩者的證據強度不同，報告時分開看。",
      size=11, color=GREY, first=True, space_after=0)
 
-# ───────────────────────────────── 12 部署狀況
-s = new("DEPLOYMENT", "部署狀況：已安裝 8 台開發機", 12)
+# ───────────────────────────────── 13 部署狀況
+s = new("DEPLOYMENT", "部署狀況：已安裝 8 台開發機", 13)
 tf = tb(s, Inches(0.62), Inches(1.72), Inches(12.1), Inches(0.4))
 para(tf, "sensAI 沒有透過任何統一派送機制推送。這 8 台，是 8 位工程師各自決定安裝的結果。",
      size=14, color=DARK, first=True, space_after=0, line=1.25)
@@ -549,8 +626,8 @@ para(tf, "下一個里程碑：試行專案全員部署 —— 目標是讓部�
          "變成「整個專案的標準配備」。",
      size=13, color=WHITE, bold=True, first=True, space_after=0)
 
-# ───────────────────────────────── 13 下一步
-s = new("NEXT", "下一步與所需支援", 13)
+# ───────────────────────────────── 14 下一步
+s = new("NEXT", "下一步與所需支援", 14)
 tf = tb(s, Inches(0.62), Inches(1.8), Inches(12.1), Inches(0.35))
 para(tf, "建議以一個專案小規模試行，用真實缺陷驗證效益，再決定是否推廣。",
      size=15, color=DARK, first=True, space_after=0)

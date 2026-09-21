@@ -1,6 +1,6 @@
 # 主管簡報
 
-`docs/sensAI_報告.pptx`（16:9，13 頁）的產生原始碼。
+`docs/sensAI_報告.pptx`（16:9，14 頁）的產生原始碼。
 
 ## 重新產生
 
@@ -24,10 +24,11 @@ python3 docs/slides/build.py
 | 7 | 實機畫面：範例檔審查 |
 | 8 | 實戰驗證：真實專案的真實缺陷 |
 | 9 | 資安與治理 |
-| 10 | 目前進度與已知限制 |
-| 11 | 目前已有的數據與出處 |
-| 12 | 部署狀況：已安裝台數 |
-| 13 | 下一步與所需支援 |
+| 10 | 單次審查的 token 用量與地端模型適配性 |
+| 11 | 目前進度與已知限制 |
+| 12 | 目前已有的數據與出處 |
+| 13 | 部署狀況：已安裝台數 |
+| 14 | 下一步與所需支援 |
 
 ## 圖片素材
 
@@ -58,3 +59,5 @@ chromium --headless --hide-scrollbars --force-device-scale-factor=2 \
 | 去抖動 1,000 ms／120 KB／深度 2 | `package.json` 的 `contributes.configuration` 預設值 |
 | 65.9s / 18 header / 7 個月 | ps5032 專案 `phal_sys.c` 的實機審查（n=1） |
 | 8 台 | VS Code 擴充詳細頁顯示的安裝數 |
+| 20,142 / 12,254 bytes | `node scripts/review.mjs examples/uart_dma.{c,s} --show-prompt \| wc -c` |
+| 145,654 bytes（上限） | contextBudgetBytes 120000 ＋ rules.yaml ＋ abi.ts ＋ prompt 骨架 |
