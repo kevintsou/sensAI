@@ -1,0 +1,195 @@
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
+<style>
+:root{
+  --vscode-font-family:"WenQuanYi Zen Hei","Segoe UI",sans-serif;
+  --vscode-font-size:13px;
+  --vscode-editor-font-family:"WenQuanYi Zen Hei Mono","DejaVu Sans Mono",monospace;
+  --vscode-foreground:#cccccc;
+  --vscode-descriptionForeground:#9d9d9d;
+  --vscode-editorWidget-background:#252526;
+  --vscode-charts-orange:#d18616;
+  --vscode-charts-yellow:#cca700;
+  --vscode-charts-blue:#3794ff;
+  --vscode-textLink-foreground:#4daafc;
+  --vscode-errorForeground:#f48771;
+  --vscode-panel-border:#3c3c3c;
+  --vscode-input-background:#313131;
+  --vscode-input-foreground:#cccccc;
+  --vscode-input-border:#3c3c3c;
+  --vscode-inputValidation-infoBackground:#063b49;
+}
+html,body{margin:0;padding:0;background:#1f1f1f;}
+.win{width:1600px;height:960px;display:flex;flex-direction:column;
+  font-family:var(--vscode-font-family);color:#cccccc;overflow:hidden;
+  border:1px solid #2b2b2b;}
+.title{height:36px;background:#181818;display:flex;align-items:center;
+  justify-content:center;font-size:13px;color:#9d9d9d;border-bottom:1px solid #2b2b2b;}
+.body{flex:1;display:flex;min-height:0;}
+.activity{width:52px;background:#181818;border-right:1px solid #2b2b2b;
+  display:flex;flex-direction:column;align-items:center;padding-top:10px;gap:18px;}
+.act{width:26px;height:26px;opacity:.55;font-size:18px;text-align:center;line-height:26px;}
+.act.on{opacity:1;color:#fff;position:relative;}
+.act.on:before{content:"";position:absolute;left:-14px;top:0;width:2px;height:26px;background:#0078d4;}
+.explorer{width:210px;background:#181818;border-right:1px solid #2b2b2b;font-size:12.5px;padding:8px 0;}
+.explorer .h{padding:4px 14px;color:#9d9d9d;font-size:11px;letter-spacing:.08em;}
+.explorer .f{padding:3px 14px 3px 26px;color:#cccccc;}
+.explorer .f.sel{background:#04395e;}
+.explorer .f.dim{color:#9d9d9d;}
+.editor{flex:1;min-width:0;display:flex;flex-direction:column;background:#1f1f1f;}
+.tabs{height:35px;background:#181818;display:flex;align-items:stretch;border-bottom:1px solid #2b2b2b;}
+.tab{padding:0 16px;display:flex;align-items:center;font-size:12.5px;color:#9d9d9d;border-right:1px solid #2b2b2b;}
+.tab.on{background:#1f1f1f;color:#fff;border-top:1px solid #0078d4;}
+.code{flex:1;overflow:hidden;font-family:var(--vscode-editor-font-family);
+  font-size:12.5px;line-height:19px;padding:8px 0;}
+.ln{display:flex;}
+.ln .n{width:46px;text-align:right;padding-right:16px;color:#6e7681;flex:none;}
+.ln .t{white-space:pre;}
+.ln.hl{background:#2a2d2e;}
+.ln.hl .n{color:#cccccc;}
+.kw{color:#569cd6}.ty{color:#4ec9b0}.fn{color:#dcdcaa}.num{color:#b5cea8}
+.str{color:#ce9178}.cm{color:#6a9955}.mac{color:#c586c0}.id{color:#9cdcfe}
+.gut{position:relative}
+.side{width:430px;background:#181818;border-left:1px solid #2b2b2b;display:flex;flex-direction:column;}
+.side-h{height:35px;display:flex;align-items:center;padding:0 14px;font-size:11px;
+  letter-spacing:.09em;color:#9d9d9d;border-bottom:1px solid #2b2b2b;}
+.side-b{flex:1;overflow:hidden;}
+.status{height:24px;background:#181818;border-top:1px solid #2b2b2b;display:flex;
+  align-items:center;padding:0 12px;font-size:11.5px;color:#9d9d9d;gap:18px;}
+
+/* ===== 以下直接取自 src/panel.ts 的樣式 ===== */
+body.p {font-family: var(--vscode-font-family);font-size: var(--vscode-font-size);color: var(--vscode-foreground);padding: 8px;line-height: 1.5;}
+.muted { color: var(--vscode-descriptionForeground); }
+.meta { margin-bottom: 12px; }
+.meta > div:first-child { font-weight: 600; }
+.finding {border-left: 3px solid var(--vscode-descriptionForeground);padding: 8px 10px;margin-bottom: 10px;background: var(--vscode-editorWidget-background);}
+.sev-error { border-left-color: var(--vscode-charts-orange); }
+.sev-warning { border-left-color: var(--vscode-charts-yellow); }
+.sev-info { border-left-color: var(--vscode-charts-blue); }
+.row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.badge {font-size: 0.85em;text-transform: uppercase;letter-spacing: 0.04em;color: var(--vscode-descriptionForeground);}
+.rule {font-size: 0.85em;font-family: var(--vscode-editor-font-family);color: var(--vscode-descriptionForeground);}
+.msg { font-weight: 600; margin-bottom: 6px; }
+dl { margin: 0 0 8px; }
+dt {font-size: 0.8em;font-weight: 600;text-transform: uppercase;letter-spacing: 0.05em;color: var(--vscode-descriptionForeground);margin-top: 8px;}
+dd { margin: 1px 0 2px; color: var(--vscode-foreground); }
+button.link {background: none;border: none;padding: 0;color: var(--vscode-textLink-foreground);cursor: pointer;font: inherit;}
+button.mute {background: none;border: 1px solid var(--vscode-descriptionForeground);border-radius: 2px;color: var(--vscode-descriptionForeground);font-size: 0.85em;padding: 2px 8px;}
+label.pin {display: inline-flex;align-items: center;gap: 3px;font-size: 0.85em;color: var(--vscode-descriptionForeground);}
+label.pin input { margin: 0; }
+details.collapsed summary{color:var(--vscode-descriptionForeground);font-size:.9em;}
+</style></head><body>
+<div class="win">
+  <div class="title">uart_dma.c — firmware-project — Visual Studio Code</div>
+  <div class="body">
+    <div class="activity">
+      <div class="act">🗎</div><div class="act">⑂</div><div class="act on">◎</div><div class="act">⚙</div>
+    </div>
+    <div class="explorer">
+      <div class="h">總管</div>
+      <div class="f dim">▾ firmware-project</div>
+      <div class="f dim">&nbsp;&nbsp;▾ .sensai</div>
+      <div class="f">&nbsp;&nbsp;&nbsp;&nbsp;rules.yaml</div>
+      <div class="f">&nbsp;&nbsp;&nbsp;&nbsp;config.yaml</div>
+      <div class="f dim">&nbsp;&nbsp;▾ src</div>
+      <div class="f sel">&nbsp;&nbsp;&nbsp;&nbsp;uart_dma.c</div>
+      <div class="f">&nbsp;&nbsp;&nbsp;&nbsp;uart_dma.s</div>
+      <div class="f">&nbsp;&nbsp;&nbsp;&nbsp;soc_regs.h</div>
+    </div>
+    <div class="editor">
+      <div class="tabs"><div class="tab on">uart_dma.c</div><div class="tab">rules.yaml</div></div>
+      <div class="code" id="code"></div>
+    </div>
+    <div class="side">
+      <div class="side-h">SENSAI：FINDINGS</div>
+      <div class="side-b"><div class="p" id="panel"></div></div>
+    </div>
+  </div>
+  <div class="status">
+    <span>⑂ main</span><span>◎ sensAI：6 則意見</span><span>行 50，欄 5</span><span>C</span>
+  </div>
+</div>
+<script>
+const src = [
+[40,'<span class="kw">void</span> <span class="fn">uart_send_dma</span>(<span class="kw">const</span> <span class="ty">uint8_t</span> *data, <span class="ty">uint32_t</span> len)'],
+[41,'{'],
+[42,'    <span class="kw">if</span> (len &gt; TX_BUF_SIZE) {'],
+[43,'        len = TX_BUF_SIZE;'],
+[44,'    }'],
+[45,''],
+[46,'    <span class="kw">for</span> (<span class="ty">uint32_t</span> i = <span class="num">0</span>; i &lt; len; i++) {'],
+[47,'        <span class="id">tx_buf</span>[i] = data[i];'],
+[48,'    }'],
+[49,''],
+[50,'    <span class="fn">dma_start</span>(DMA_CH0, <span class="id">tx_buf</span>, len);',1],
+[51,'}'],
+[52,''],
+[53,'<span class="kw">void</span> <span class="fn">UART0_IRQHandler</span>(<span class="kw">void</span>)'],
+[54,'{'],
+[55,'    <span class="ty">uint32_t</span> status = <span class="id">UART0</span>-&gt;STATUS;'],
+[56,''],
+[57,'    <span class="kw">if</span> (status &amp; UART_STATUS_TXDONE) {'],
+[58,'        <span class="id">tx_count_isr</span>++;'],
+[59,'        <span class="id">UART0</span>-&gt;STATUS |= UART_STATUS_TXDONE;',1],
+[60,'    }'],
+[61,''],
+[62,'    <span class="kw">if</span> (status &amp; UART_STATUS_RXREADY) {'],
+[63,'        <span class="id">ring</span>[ring_head % RING_SIZE] = (<span class="ty">uint8_t</span>)<span class="id">UART0</span>-&gt;DATA;'],
+[64,'        <span class="id">ring_head</span>++;'],
+[65,''],
+[66,'        <span class="id">rx_ready</span> = <span class="num">1</span>;'],
+[67,'        <span class="id">UART0</span>-&gt;STATUS = UART_STATUS_RXREADY;'],
+[68,'    }'],
+[69,''],
+[70,'    <span class="kw">if</span> (status &amp; UART_STATUS_OVERRUN) {'],
+[71,'        <span class="kw">char</span> *msg = <span class="fn">malloc</span>(<span class="num">64</span>);',1],
+[72,'        <span class="fn">sprintf</span>(msg, <span class="str">"overrun at %lu"</span>, (<span class="kw">unsigned long</span>)tx_count_isr);'],
+[73,'        <span class="fn">log_write</span>(msg);'],
+[74,'        <span class="fn">free</span>(msg);'],
+[75,'        <span class="id">UART0</span>-&gt;STATUS = UART_STATUS_OVERRUN;'],
+[76,'    }'],
+[77,'}'],
+];
+document.getElementById('code').innerHTML = src.map(
+  ([n,t,hl])=>`<div class="ln${hl?' hl':''}"><span class="n">${n}</span><span class="t">${t}</span></div>`
+).join('');
+
+const F = [
+ {sev:'error',line:50,rule:'dma-cache-maintenance',
+  msg:'啟動 DMA 前沒有做 cache clean',
+  trg:'D-cache 為 write-back，tx_buf 的內容此時仍可能只在 cache 內',
+  con:'DMA 搬出去的是過期資料，UART 送出錯誤位元組，且只在特定 cache 狀態下重現',
+  evi:'第 47 行寫入 tx_buf、第 50 行 dma_start()，兩者之間沒有 dma_cache_clean()'},
+ {sev:'error',line:59,rule:'w1c-status-bits',
+  msg:'用 |= 清除 write-one-to-clear 狀態位元',
+  trg:'STATUS 為 W1C 暫存器，|= 會先讀回整個暫存器再整包寫回',
+  con:'同時間被硬體設起的 RXREADY / OVERRUN 會一併被清掉，中斷遺失',
+  evi:'第 59 行 UART0->STATUS |= UART_STATUS_TXDONE；第 67 行同一暫存器用直接寫入'},
+ {sev:'error',line:71,rule:'isr-non-reentrant',
+  msg:'ISR 內呼叫非可重入函式 malloc / sprintf / free',
+  trg:'UART0_IRQHandler 在主程式已持有 heap lock 時觸發',
+  con:'heap 結構毀損或死結，現場不可預期',
+  evi:'第 71、72、74 行位於 UART0_IRQHandler 內'},
+ {sev:'warning',line:20,rule:'volatile-shared-state',
+  msg:'rx_ready、pending_events 由 ISR 與主程式共用，缺少 volatile',
+  trg:'編譯器最佳化將第 82 行的輪詢條件提到迴圈外',
+  con:'主程式卡在 while (!rx_ready) 不會醒來',
+  evi:'第 20、21 行宣告；第 66 行由 ISR 寫入、第 82 行由主程式讀取'},
+];
+const sevl = s=>s;
+document.getElementById('panel').innerHTML =
+`<div class="meta"><div>uart_dma.c</div>
+ <div class="muted">6 則意見 · 附帶 3 個 header · 8.4s · 濾除 2 則 · 14:32:07</div></div>`
++ F.map((f,i)=>`<div class="finding sev-${f.sev}">
+  <div class="row">
+    <label class="pin"><input type="checkbox"${i==0?' checked':''}> 釘選</label>
+    <span class="badge">${sevl(f.sev)}</span>
+    <button class="link">第 ${f.line} 行</button>
+    <span class="rule">${f.rule}</span>
+  </div>
+  <div class="msg">${f.msg}</div>
+  <dl><dt>觸發條件</dt><dd>${f.trg}</dd>
+      <dt>後果</dt><dd>${f.con}</dd>
+      <dt>依據</dt><dd>${f.evi}</dd></dl>
+  <button class="mute">這是誤報</button></div>`).join('')
++ `<details class="collapsed"><summary>另有 2 則較低嚴重度的意見（意見過多，已收合）</summary></details>`;
+</script></body></html>

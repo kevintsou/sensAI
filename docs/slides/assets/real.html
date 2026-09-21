@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><style>
+:root{--fg:#cccccc;--dim:#9d9d9d;--wid:#252526;--or:#d18616;--lnk:#4daafc;}
+html,body{margin:0;background:#1f1f1f;}
+.win{width:1560px;height:640px;display:flex;font-family:"WenQuanYi Zen Hei",sans-serif;
+ color:var(--fg);border:1px solid #2b2b2b;overflow:hidden;}
+.act{width:44px;background:#181818;border-right:1px solid #2b2b2b;display:flex;flex-direction:column;
+ align-items:center;padding-top:8px;gap:16px;font-size:16px;color:#9d9d9d;}
+.act .on{color:#fff}
+.side{width:470px;background:#181818;border-right:1px solid #2b2b2b;display:flex;flex-direction:column;}
+.side-h{height:30px;display:flex;align-items:center;padding:0 12px;font-size:11px;letter-spacing:.09em;color:#9d9d9d;}
+.p{padding:8px;font-size:13px;line-height:1.5;}
+.meta{margin-bottom:10px}.meta>div:first-child{font-weight:600}
+.muted{color:var(--dim)}
+.stage{color:var(--dim);font-size:.92em;margin:4px 0 10px}
+.finding{border-left:3px solid var(--or);padding:8px 10px;background:var(--wid);}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.pin{display:inline-flex;align-items:center;gap:3px;font-size:.85em;color:var(--dim)}
+.pin input{margin:0}
+.badge{font-size:.85em;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)}
+.link{color:var(--lnk)}
+.rule{font-size:.85em;font-family:"DejaVu Sans Mono",monospace;color:var(--dim)}
+.msg{font-weight:600;margin-bottom:6px}
+dl{margin:0 0 8px}
+dt{font-size:.8em;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin-top:8px}
+dd{margin:1px 0 2px;color:var(--fg)}
+.mute{display:inline-block;border:1px solid var(--dim);border-radius:2px;color:var(--dim);font-size:.85em;padding:2px 8px;margin-top:4px}
+.ed{flex:1;min-width:0;display:flex;flex-direction:column;background:#1f1f1f}
+.tabs{height:32px;background:#181818;display:flex;border-bottom:1px solid #2b2b2b}
+.tab{padding:0 14px;display:flex;align-items:center;font-size:12px;color:#9d9d9d;border-right:1px solid #2b2b2b}
+.tab.on{background:#1f1f1f;color:#fff;border-top:1px solid #0078d4}
+.crumb{height:26px;display:flex;align-items:center;padding:0 14px;font-size:12px;color:#9d9d9d;gap:6px}
+.code{flex:1;font-family:"DejaVu Sans Mono",monospace;font-size:13px;line-height:20px;padding:6px 0}
+.ln{display:flex}.ln .n{width:56px;text-align:right;padding-right:16px;color:#6e7681;flex:none}
+.ln .t{white-space:pre}
+.ln.hl{background:#2a2d2e}
+.blame{color:#5a5a5a;font-size:.9em;padding-left:26px}
+.kw{color:#569cd6}.ty{color:#4ec9b0}.fn{color:#dcdcaa}.num{color:#b5cea8}
+.cm{color:#6a9955}.id{color:#9cdcfe}.mac{color:#c586c0}.str{color:#ce9178}
+</style></head><body>
+<div class="win">
+ <div class="act"><div>🗎</div><div>🔍</div><div>⑂</div><div>▷</div><div class="on">◎</div></div>
+ <div class="side">
+  <div class="side-h">SENSAI：FINDINGS</div>
+  <div class="p">
+   <div class="meta"><div>phal_sys.c</div>
+    <div class="muted">1 則意見 · 附帶 18 個 header · 65.9s · 上下文已截斷 · 14:06:04</div></div>
+   <div class="stage">只看剛改動的行 · 完整審查進行中…</div>
+   <div class="finding">
+    <div class="row"><label class="pin"><input type="checkbox"> 釘選</label>
+      <span class="badge">error</span><span class="link">第 315 行</span>
+      <span class="rule">syntax-error</span></div>
+    <div class="msg">return 被註解掉，宣告回傳 U32 的函式沒有回傳值</div>
+    <dl>
+     <dt>觸發條件</dt><dd>編譯時，phal_sys_get_all_gpio_input_value 的控制流程走到函式結尾（第 315 行的 return 已註解，函式內沒有其他 return），編譯器發出 control reaches end of non-void function；開 -Werror 時建置直接失敗。若只以警告放行，任何呼叫端取用回傳值時就會踩到未定義行為</dd>
+     <dt>後果</dt><dd>第 310~313 行算出的 ulInput 沒有任何使用點，會被編譯器連同整個迴圈優化掉，函式變成空函式；呼叫端拿到回傳暫存器的殘值（垃圾），所有依賴 GPIO 輸入狀態的判斷都建立在錯誤資料上</dd>
+     <dt>依據</dt><dd>第 315 行「//return ulInput;」；函式簽名為「U32 phal_sys_get_all_gpio_input_value(void)」（第 306 行），函式體內僅第 308 行宣告 ulInput、第 312 行累加，其後無任何 return</dd>
+    </dl>
+    <span class="mute">這是誤報</span>
+   </div>
+  </div>
+ </div>
+ <div class="ed">
+  <div class="tabs"><div class="tab">vuc_spi_cmd.c</div><div class="tab">vendor_handler.c</div>
+    <div class="tab">uart.c</div><div class="tab on">phal_sys.c</div></div>
+  <div class="crumb">ws_fw › src_root › proj › ps5032 › phal › phal_sys.c › phal_sys_get_all_gpio_input_value(void)</div>
+  <div class="code" id="c"></div>
+ </div>
+</div>
+<script>
+const L=[
+[301,'<span class="ty">U32</span> <span class="fn">phal_sys_get_all_gpio_latch_value</span>(<span class="kw">void</span>)'],
+[302,'{'],
+[303,'    <span class="kw">return</span> <span class="fn">r_cr_SYS_GPIO_LH</span>();'],
+[304,'}'],
+[305,''],
+[306,'<span class="ty">U32</span> <span class="fn">phal_sys_get_all_gpio_input_value</span>(<span class="kw">void</span>)'],
+[307,'{'],
+[308,'    <span class="ty">U32</span> <span class="id">ulInput</span> = <span class="num">0UL</span>;'],
+[309,''],
+[310,'    <span class="kw">for</span> (<span class="ty">U8</span> <span class="id">ubGpioNum</span> = <span class="num">0U</span>; ubGpioNum &lt; GPIO_NUM_TOTAL; ubGpioNum++)'],
+[311,'    {'],
+[312,'        <span class="id">ulInput</span> |= (((<span class="ty">U32</span>)((<span class="fn">r16_r_GPIO_CTRL_0</span>(ubGpioNum)) &gt;&gt; <span class="id">cr_R32F_GPIO_</span>…'],
+[313,'    }'],
+[314,''],
+[315,'    <span class="cm">//return ulInput;</span><span class="blame">felix lan, 7 months ago • dev gpio mux</span>',1],
+[316,'}'],
+[317,''],
+];
+document.getElementById('c').innerHTML=L.map(([n,t,h])=>
+`<div class="ln${h?' hl':''}"><span class="n">${n}</span><span class="t">${t}</span></div>`).join('');
+</script></body></html>

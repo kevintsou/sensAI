@@ -1,0 +1,50 @@
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><style>
+html,body{margin:0;background:#1f1f1f;}
+.win{width:1500px;height:820px;display:flex;flex-direction:column;border:1px solid #2b2b2b;
+ font-family:"WenQuanYi Zen Hei",sans-serif;color:#ccc;}
+.tabs{height:35px;background:#181818;display:flex;border-bottom:1px solid #2b2b2b;}
+.tab{padding:0 16px;display:flex;align-items:center;font-size:12.5px;color:#9d9d9d;border-right:1px solid #2b2b2b;}
+.tab.on{background:#1f1f1f;color:#fff;border-top:1px solid #0078d4;}
+.code{flex:1;font-family:"WenQuanYi Zen Hei Mono","DejaVu Sans Mono",monospace;font-size:13.5px;line-height:20px;padding:10px 0;background:#1f1f1f;}
+.ln{display:flex}.ln .n{width:50px;text-align:right;padding-right:18px;color:#6e7681;flex:none}
+.ln .t{white-space:pre}
+.cm{color:#6a9955}.k{color:#569cd6}.v{color:#ce9178}.p{color:#d4d4d4}.b{color:#dcdcaa}
+</style></head><body>
+<div class="win">
+ <div class="tabs"><div class="tab">uart_dma.c</div><div class="tab on">rules.yaml — .sensai</div></div>
+ <div class="code" id="c"></div>
+</div>
+<script>
+const L=[
+'<span class="cm"># .sensai/rules.yaml —— 隨專案進版控，git pull 就生效</span>',
+'',
+'<span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="v">dma-cache-maintenance</span>',
+'  <span class="k">languages</span><span class="p">:</span> [<span class="v">c</span>]',
+'  <span class="k">severity</span><span class="p">:</span> <span class="v">error</span>',
+'  <span class="k">rule</span><span class="p">:</span> <span class="p">|</span>',
+'    <span class="v">本專案 SoC 的 D-cache 是 write-back。DMA buffer 在啟動 DMA 前必須先 clean</span>',
+'    <span class="v">（CPU 寫、DMA 讀的方向），或在讀取 DMA 結果前先 invalidate。</span>',
+'    <span class="v">要呼叫 dma_cache_clean() / dma_cache_invalidate()，只下 __DSB() 是不夠的 ——</span>',
+'    <span class="v">DSB 只保證存取順序，不會把資料推出 cache。</span>',
+'  <span class="k">examples</span><span class="p">:</span>',
+'    <span class="k">bad</span><span class="p">:</span> <span class="p">|</span>',
+'      <span class="v">memcpy(tx_buf, data, len);</span>',
+'      <span class="v">dma_start(DMA_CH0, tx_buf, len);</span>',
+'    <span class="k">good</span><span class="p">:</span> <span class="p">|</span>',
+'      <span class="v">memcpy(tx_buf, data, len);</span>',
+'      <span class="v">dma_cache_clean(tx_buf, len);</span>',
+'      <span class="v">dma_start(DMA_CH0, tx_buf, len);</span>',
+'',
+'<span class="p">-</span> <span class="k">id</span><span class="p">:</span> <span class="v">volatile-shared-state</span>',
+'  <span class="k">severity</span><span class="p">:</span> <span class="v">warning</span>',
+'  <span class="k">rule</span><span class="p">:</span> <span class="p">|</span>',
+'    <span class="v">被 ISR 與主程式同時存取的變數必須標 volatile。</span>',
+'  <span class="k">except</span><span class="p">:</span> <span class="p">|</span>',
+'    <span class="v">命名以 _isr 結尾的變數是 ISR 專用副本，不算共享，不要報。</span>',
+'    <span class="v">各自只有單一 writer 的 ring buffer 索引不算共享。</span>',
+'',
+'<span class="cm"># 目前 10 條：DMA cache、W1C、ISR 可重入、RMW 臨界區、延遲迴圈、</span>',
+'<span class="cm"># 未對齊轉型、硬體輪詢逾時、堆疊位址逃逸、整數轉指標、組語 ABI …</span>',
+];
+document.getElementById('c').innerHTML=L.map((t,i)=>`<div class="ln"><span class="n">${i+1}</span><span class="t">${t}</span></div>`).join('');
+</script></body></html>
