@@ -63,6 +63,26 @@ function readSettings(): Settings {
   };
 }
 
+/**
+ * 切換 sensai.enabled。
+ *
+ * 寫到「目前真正決定這個值」的那一層：專案的 .vscode/settings.json 若有寫，
+ * 只改使用者設定會被它蓋掉，按了沒反應。都沒寫才寫使用者設定 —— 暫時關掉
+ * 通常是「我這台機器先不要」，不該變成 commit 進版控的專案設定。
+ */
+async function setEnabled(enabled: boolean): Promise<void> {
+  const c = vscode.workspace.getConfiguration("sensai");
+  const info = c.inspect<boolean>("enabled");
+  const target =
+    info?.workspaceValue !== undefined
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+  await c.update("enabled", enabled, target);
+  void vscode.window.showInformationMessage(
+    enabled ? "sensAI：已開啟存檔自動審查。" : "sensAI：已暫時關閉，存檔不會再送出審查。",
+  );
+}
+
 class Controller {
   private rules: Rule[] = [];
   private config: ProjectConfig = {
@@ -220,6 +240,9 @@ class Controller {
     if (!this.owedFullReview.delete(filePath)) {
       return;
     }
+    if (!readSettings().enabled) {
+      return;
+    }
     const document = this.documents.get(filePath);
     if (!document) {
       return;
@@ -246,6 +269,11 @@ class Controller {
     }
 
     const settings = readSettings();
+    // 自動觸發要看開關。關掉之前就排進 SingleFlight 的補跑、或 burst 結束後的
+    // 補做，到這裡都該放棄；手動的 Review Current File 是使用者明確要求，照跑。
+    if (!settings.enabled && trigger === "save") {
+      return;
+    }
     const source = document.getText();
     this.lastSource.set(filePath, source);
     // 送出當下的版本。審查要跑好幾秒，這期間使用者通常還在打字 ——
@@ -796,6 +824,21 @@ class Controller {
     void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆釘選。`);
   }
 
+  /**
+   * sensai.enabled 被關掉時呼叫。
+   *
+   * 只擋新的存檔觸發不夠：關掉前已經在等的去抖動、跑到一半的請求、burst 欠下的
+   * 完整審查，都會在關掉之後才送出去。使用者關掉多半就是不想再外送，這些全收掉。
+   */
+  stopAutomaticReviews(): void {
+    this.debouncer.cancelAll();
+    this.owedFullReview.clear();
+    for (const abort of this.inFlightAborts.values()) {
+      abort.abort();
+    }
+    this.output.appendLine("[review] sensAI 已關閉：存檔不再自動審查。");
+  }
+
   dispose(): void {
     this.debouncer.dispose();
   }
@@ -813,6 +856,19 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "sensai.showPanel";
   status.text = "sensAI";
   status.show();
+
+  // 開關獨立一顆，主狀態列項目仍然是「打開面板」，兩者互不搶點擊。
+  const toggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  toggle.command = "sensai.toggle";
+  const renderToggle = () => {
+    const enabled = readSettings().enabled;
+    toggle.text = enabled ? "$(eye)" : "$(eye-closed) sensAI 已關閉";
+    toggle.tooltip = enabled
+      ? "sensAI：存檔自動審查中。點一下暫時關閉"
+      : "sensAI：已關閉，存檔不會審查。點一下重新開啟";
+    toggle.show();
+  };
+  renderToggle();
 
   let controller: Controller;
   const panel = new FindingsPanel({
@@ -838,6 +894,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     status,
+    toggle,
     { dispose: () => controller.dispose() },
     vscode.window.registerWebviewViewProvider(FindingsPanel.viewId, panel),
 
@@ -871,6 +928,20 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sensai.reloadRules", () =>
       controller.reloadProjectFiles(true),
     ),
+    vscode.commands.registerCommand("sensai.toggle", () => setEnabled(!readSettings().enabled)),
+    vscode.commands.registerCommand("sensai.enable", () => setEnabled(true)),
+    vscode.commands.registerCommand("sensai.disable", () => setEnabled(false)),
+
+    // 不論是從指令、狀態列還是直接改 settings.json 關掉，都走這裡收尾。
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("sensai.enabled")) {
+        return;
+      }
+      renderToggle();
+      if (!readSettings().enabled) {
+        controller.stopAutomaticReviews();
+      }
+    }),
   );
 
   // 專案設定與目前設定的規則檔改動都熱重載，不用重開視窗。

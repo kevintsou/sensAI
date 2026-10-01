@@ -2,6 +2,16 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Added
+
+- On/off switch for review-on-save without uninstalling: an eye icon in the status bar, plus **sensAI: Toggle On/Off**, **sensAI: Enable** and **sensAI: Disable Temporarily**. It flips `sensai.enabled`, writing to the project's `.vscode/settings.json` if that is where the value is set (otherwise a user-level toggle would be overridden and appear to do nothing), and to user settings otherwise.
+
+### Fixed
+
+- Turning `sensai.enabled` off only stopped new saves from being picked up. A save still waiting out the debounce, a review already in flight, its queued re-run and the full review owed after a burst were all still sent afterwards. Disabling now cancels all of them.
+
 ## 0.5.1 — 2026-09-04
 
 ### Fixed

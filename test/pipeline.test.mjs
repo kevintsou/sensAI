@@ -600,6 +600,21 @@ test("去抖動：cancel 之後不會再觸發（手動審查搶先時用）", a
   assert.equal(fired, 0);
 });
 
+test("去抖動：cancelAll 取消所有檔案（關閉 sensAI 時用），之後仍可再排程", async () => {
+  const d = new Debouncer();
+  const fired = [];
+  d.schedule("a.c", 20, () => fired.push("a"));
+  d.schedule("b.c", 20, () => fired.push("b"));
+  d.cancelAll();
+  assert.equal(d.isPending("a.c"), false);
+  assert.equal(d.isPending("b.c"), false);
+  await sleep(40);
+  assert.deepEqual(fired, []);
+  d.schedule("a.c", 10, () => fired.push("a"));
+  await sleep(30);
+  assert.deepEqual(fired, ["a"]);
+});
+
 test("補跑那一輪會被標記為 rerun，原本那輪不會", async () => {
   const flight = saveFlight();
   const seen = [];

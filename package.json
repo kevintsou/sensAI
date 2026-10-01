@@ -70,6 +70,18 @@
       {
         "command": "sensai.clearPins",
         "title": "sensAI: Clear Pinned Findings"
+      },
+      {
+        "command": "sensai.toggle",
+        "title": "sensAI: Toggle On/Off"
+      },
+      {
+        "command": "sensai.enable",
+        "title": "sensAI: Enable"
+      },
+      {
+        "command": "sensai.disable",
+        "title": "sensAI: Disable Temporarily"
       }
     ],
     "menus": {
@@ -105,7 +117,7 @@
         "sensai.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "在存檔時自動審查 C 與組語檔案。"
+          "markdownDescription": "在存檔時自動審查 C 與組語檔案。可用狀態列的眼睛圖示或 `sensAI: Toggle On/Off` 暫時關閉；關閉時 `sensAI: Review Current File` 仍可手動使用。"
         },
         "sensai.debounceMs": {
           "type": "number",

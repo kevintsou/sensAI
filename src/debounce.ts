@@ -30,11 +30,16 @@ export class Debouncer {
     }
   }
 
-  dispose(): void {
+  /** 取消所有尚未觸發的工作。之後仍可繼續 schedule。 */
+  cancelAll(): void {
     for (const timer of this.timers.values()) {
       clearTimeout(timer);
     }
     this.timers.clear();
+  }
+
+  dispose(): void {
+    this.cancelAll();
   }
 
   /** 測試與診斷用。 */
