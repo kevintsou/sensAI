@@ -309,8 +309,8 @@ npm run mock -- --mode slow      # 拖 30 秒，驗逾時處理
 4. 側欄應出現 sensAI 面板；**View → Output → 選 `sensAI` 頻道**可看到狀態、
    被濾除的意見與錯誤訊息。
 
-審查（存檔與手動）都要 `sensai.enabled` 為 `true`（預設）。狀態列的眼睛圖示
-可隨時切換，見 [6. 常用指令一覽](#6-常用指令一覽)。
+審查（存檔與手動）都要 `sensai.enabled` 為 `true`（預設）。側欄標題列與狀態列的眼睛
+圖示可隨時切換，見 [6. 常用指令一覽](#6-常用指令一覽)。
 
 ### 5.3 什麼時候才會觸發審查
 
@@ -419,11 +419,16 @@ npm run review -- path/to/file.c --json
 | `sensAI: Reload Rules` | 重新載入規則（改完 rules.yaml 通常會自動重載） |
 | `sensAI: Export False Positive Report` | 匯出本機誤報記錄 |
 | `sensAI: Clear Local Mutes` | 清除本機靜音 |
-| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI（同狀態列的眼睛圖示） |
+| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI（同側欄標題列與狀態列的眼睛圖示） |
 | `sensAI: Disable Temporarily` / `sensAI: Enable` | 明確關閉／開啟 |
 
-暫時關閉不用解除安裝：點狀態列右下的 **眼睛圖示**（關閉時顯示 `sensAI 已關閉`），
-或執行 `sensAI: Toggle On/Off`。**關閉就是完全不外送**：還在等待或進行中的審查
+暫時關閉不用解除安裝，開關在兩個地方：
+
+- **sensAI 側欄的標題列**（面板右上角）的眼睛按鈕：睜眼代表開啟中，點了就關閉；
+  閉眼代表已關閉，點了就開啟。
+- **狀態列右下角**，緊接在 `sensAI` 右邊的 `👁 開啟中`／`已關閉`。
+
+也可以執行 `sensAI: Toggle On/Off`。**關閉就是完全不外送**：還在等待或進行中的審查
 （包括手動觸發的）會立刻取消，之後存檔不會審查，`sensAI: Review Current File`
 也會被擋下並詢問是否重新開啟，編輯器標題列的審查按鈕會隱藏。面板、釘選與筆記
 仍可檢視。開關寫在 `sensai.enabled`：若專案的 `.vscode/settings.json` 有設定它

@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## 0.6.1 — 2026-10-01
+
+### Changed
+
+- The on/off switch was hard to find: in the status bar it was a bare eye icon placed against the main sensAI item, so it read as part of it. It now also sits in the sensAI panel's title bar (open eye while on, closed eye while off), and the status-bar item sits to the right of the main item with a label, reading "sensAI 👁 開啟中" or "sensAI 已關閉".
+
 ## 0.6.0 — 2026-10-01
 
 ### Added

@@ -858,11 +858,13 @@ export function activate(context: vscode.ExtensionContext): void {
   status.show();
 
   // 開關獨立一顆，主狀態列項目仍然是「打開面板」，兩者互不搶點擊。
-  const toggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  // 排在主項目右邊（priority 較低）並帶文字，連起來讀是「sensAI 開啟中／已關閉」；
+  // 只放一個圖示的話，看起來像主項目的裝飾，使用者找不到。
+  const toggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
   toggle.command = "sensai.toggle";
   const renderToggle = () => {
     const enabled = readSettings().enabled;
-    toggle.text = enabled ? "$(eye)" : "$(eye-closed) sensAI 已關閉";
+    toggle.text = enabled ? "$(eye) 開啟中" : "$(eye-closed) 已關閉";
     toggle.tooltip = enabled
       ? "sensAI：運作中。點一下暫時關閉"
       : "sensAI：已關閉，不會送出任何審查（包括手動）。點一下重新開啟";
