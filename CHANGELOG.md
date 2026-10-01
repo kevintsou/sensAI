@@ -6,7 +6,11 @@ All notable changes to sensAI are documented in this file.
 
 ### Added
 
-- On/off switch for review-on-save without uninstalling: an eye icon in the status bar, plus **sensAI: Toggle On/Off**, **sensAI: Enable** and **sensAI: Disable Temporarily**. It flips `sensai.enabled`, writing to the project's `.vscode/settings.json` if that is where the value is set (otherwise a user-level toggle would be overridden and appear to do nothing), and to user settings otherwise.
+- On/off switch to turn sensAI off temporarily without uninstalling: an eye icon in the status bar, plus **sensAI: Toggle On/Off**, **sensAI: Enable** and **sensAI: Disable Temporarily**. It flips `sensai.enabled`, writing to the project's `.vscode/settings.json` if that is where the value is set (otherwise a user-level toggle would be overridden and appear to do nothing), and to user settings otherwise.
+
+### Changed
+
+- `sensai.enabled` is now a master switch, not just review-on-save. When off, nothing is sent: **Review Current File** is refused with a prompt offering to turn sensAI back on, the editor-title review button is hidden, and clearing local mutes no longer triggers a re-review. The panel, pins and notes stay viewable.
 
 ### Fixed
 

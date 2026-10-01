@@ -88,7 +88,7 @@
       "editor/title": [
         {
           "command": "sensai.reviewCurrentFile",
-          "when": "resourceExtname =~ /\\.(c|h|s|S)$/",
+          "when": "config.sensai.enabled && resourceExtname =~ /\\.(c|h|s|S)$/",
           "group": "navigation"
         }
       ]
@@ -117,7 +117,7 @@
         "sensai.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "在存檔時自動審查 C 與組語檔案。可用狀態列的眼睛圖示或 `sensAI: Toggle On/Off` 暫時關閉；關閉時 `sensAI: Review Current File` 仍可手動使用。"
+          "markdownDescription": "sensAI 總開關。開啟時存檔自動審查 C 與組語檔案。關閉後不會送出任何審查，`sensAI: Review Current File` 也不例外；面板、釘選與筆記仍可檢視。可用狀態列的眼睛圖示或 `sensAI: Toggle On/Off` 切換。"
         },
         "sensai.debounceMs": {
           "type": "number",

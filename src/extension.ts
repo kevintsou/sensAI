@@ -79,7 +79,7 @@ async function setEnabled(enabled: boolean): Promise<void> {
       : vscode.ConfigurationTarget.Global;
   await c.update("enabled", enabled, target);
   void vscode.window.showInformationMessage(
-    enabled ? "sensAI：已開啟存檔自動審查。" : "sensAI：已暫時關閉，存檔不會再送出審查。",
+    enabled ? "sensAI：已開啟。" : "sensAI：已暫時關閉，不會再送出任何審查。",
   );
 }
 
@@ -269,9 +269,9 @@ class Controller {
     }
 
     const settings = readSettings();
-    // 自動觸發要看開關。關掉之前就排進 SingleFlight 的補跑、或 burst 結束後的
-    // 補做，到這裡都該放棄；手動的 Review Current File 是使用者明確要求，照跑。
-    if (!settings.enabled && trigger === "save") {
+    // 關掉就是完全不外送，手動觸發也一樣。入口處都擋過了，這裡是最後一道：
+    // 關掉之前就排進 SingleFlight 的補跑、清除靜音觸發的重審，都會走到這裡。
+    if (!settings.enabled) {
       return;
     }
     const source = document.getText();
@@ -827,16 +827,16 @@ class Controller {
   /**
    * sensai.enabled 被關掉時呼叫。
    *
-   * 只擋新的存檔觸發不夠：關掉前已經在等的去抖動、跑到一半的請求、burst 欠下的
-   * 完整審查，都會在關掉之後才送出去。使用者關掉多半就是不想再外送，這些全收掉。
+   * 只擋新的觸發不夠：關掉前已經在等的去抖動、跑到一半的請求（手動的也算）、
+   * burst 欠下的完整審查，都會在關掉之後才送出去。關掉就是不要再外送，全收掉。
    */
-  stopAutomaticReviews(): void {
+  stopAllReviews(): void {
     this.debouncer.cancelAll();
     this.owedFullReview.clear();
     for (const abort of this.inFlightAborts.values()) {
       abort.abort();
     }
-    this.output.appendLine("[review] sensAI 已關閉：存檔不再自動審查。");
+    this.output.appendLine("[review] sensAI 已關閉：不再送出任何審查。");
   }
 
   dispose(): void {
@@ -864,8 +864,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const enabled = readSettings().enabled;
     toggle.text = enabled ? "$(eye)" : "$(eye-closed) sensAI 已關閉";
     toggle.tooltip = enabled
-      ? "sensAI：存檔自動審查中。點一下暫時關閉"
-      : "sensAI：已關閉，存檔不會審查。點一下重新開啟";
+      ? "sensAI：運作中。點一下暫時關閉"
+      : "sensAI：已關閉，不會送出任何審查（包括手動）。點一下重新開啟";
     toggle.show();
   };
   renderToggle();
@@ -910,12 +910,25 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.forgetDocument(doc.uri.fsPath);
     }),
 
-    vscode.commands.registerCommand("sensai.reviewCurrentFile", () => {
+    vscode.commands.registerCommand("sensai.reviewCurrentFile", async () => {
       const doc = vscode.window.activeTextEditor?.document;
-      if (doc) {
-        panel.reveal();
-        controller.reviewNow(doc);
+      if (!doc) {
+        return;
       }
+      // 關掉時不默默吞掉：使用者明確下了指令，要讓他知道為什麼沒反應。
+      if (!readSettings().enabled) {
+        const ENABLE = "開啟並審查";
+        const pick = await vscode.window.showWarningMessage(
+          "sensAI 目前已關閉，不會送出任何審查。",
+          ENABLE,
+        );
+        if (pick !== ENABLE) {
+          return;
+        }
+        await setEnabled(true);
+      }
+      panel.reveal();
+      controller.reviewNow(doc);
     }),
     vscode.commands.registerCommand("sensai.showPanel", () => panel.reveal()),
     vscode.commands.registerCommand("sensai.initProject", () => controller.initProject()),
@@ -939,7 +952,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       renderToggle();
       if (!readSettings().enabled) {
-        controller.stopAutomaticReviews();
+        controller.stopAllReviews();
       }
     }),
   );

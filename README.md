@@ -70,7 +70,7 @@ enabling reviews on confidential firmware repositories.
 
 | Setting | Default | Purpose |
 |---|---:|---|
-| `sensai.enabled` | `true` | Review supported files on save. Toggle it from the eye icon in the status bar or **sensAI: Toggle On/Off**; turning it off also cancels pending and in-flight reviews. **Review Current File** still works while off. |
+| `sensai.enabled` | `true` | Master switch; when on, supported files are reviewed on save. Toggle it from the eye icon in the status bar or **sensAI: Toggle On/Off**. Off means nothing is sent at all: pending and in-flight reviews are cancelled, and **Review Current File** is refused too. The panel and pinned findings stay viewable. |
 | `sensai.debounceMs` | `1000` | Quiet period after a save before the review is sent; `0` sends immediately. |
 | `sensai.endpoint` | `http://127.0.0.1:3456` | Router endpoint. |
 | `sensai.model` | `claude-opus-5` | Router model key. |
@@ -123,7 +123,7 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 | `sensAI: Reload Rules` | 重新載入規則。 |
 | `sensAI: Export False Positive Report` | 匯出本機誤報記錄。 |
 | `sensAI: Clear Local Mutes` | 清除本機靜音。 |
-| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟存檔自動審查，也可直接點狀態列的眼睛圖示。關閉時手動審查仍可用。 |
+| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI，也可直接點狀態列的眼睛圖示。關閉後不會送出任何審查，手動審查也一樣。 |
 
 ### 觸發時機
 
