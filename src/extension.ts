@@ -4,7 +4,15 @@ import * as vscode from "vscode";
 import { DEFAULT_ARCH_ID } from "./abi";
 import { ProjectConfig, loadProjectConfig } from "./config";
 import { buildContext, realFileAccess, CachingFileAccess, isInSkippedDir } from "./context";
-import { changedRanges, describeRanges, gitCwd, planReview, ReviewTrigger } from "./diff";
+import {
+  ChangedFile,
+  assignFindings,
+  changesetWarning,
+  formatBytes,
+  listChangedFiles,
+  mergeHeaders,
+} from "./changeset";
+import { changedRanges, describeRanges, gitCwd, LineRange, planReview, ReviewTrigger } from "./diff";
 import { expandToEnclosingFunction } from "./funcscope";
 import {
   CarriedFindings,
@@ -17,13 +25,27 @@ import { LANGUAGE_LABEL, detectLanguage } from "./language";
 import { MuteStore, muteKey } from "./mutes";
 import { FindingsPanel } from "./panel";
 import { appendAudit, blockedPaths } from "./privacy";
-import { EndpointUnavailableError, ReviewCancelledError, requestReview } from "./review";
+import {
+  EndpointUnavailableError,
+  ReviewCancelledError,
+  requestChangesetReview,
+  requestReview,
+} from "./review";
 import { loadRules, rulesPath } from "./rules";
 import { PinStore, PinBackingStore, pinKey } from "./pins";
 import { SingleFlight } from "./singleflight";
 import { Debouncer } from "./debounce";
 import { CONFIG_TEMPLATE, GITIGNORE_TEMPLATE, RULES_TEMPLATE } from "./template";
-import { DroppedFinding, Finding, PinnedFinding, ReviewContext, Rule } from "./types";
+import {
+  ChangesetContext,
+  ChangesetTarget,
+  DroppedFinding,
+  Finding,
+  PinnedFinding,
+  ReviewContext,
+  ReviewResult,
+  Rule,
+} from "./types";
 
 /**
  * normal —— 照 planReview() 的結果跑。
@@ -32,8 +54,27 @@ import { DroppedFinding, Finding, PinnedFinding, ReviewContext, Rule } from "./t
  */
 type ReviewMode = "normal" | "burst" | "settle";
 
+/**
+ * 三種模式。存成兩個設定：sensai.enabled 是總開關，sensai.mode 選自動或手動。
+ *
+ * 不併成一個設定，是因為 enabled 已經有人在用（0.6 以前就有），而且這樣關掉
+ * 再打開時會回到原本的模式，不用另外記。
+ */
+type Mode = "auto" | "manual" | "off";
+
+const MODE_LABEL: Record<Mode, string> = {
+  auto: "$(eye) 自動",
+  manual: "$(debug-pause) 手動",
+  off: "$(eye-closed) 已關閉",
+};
+
+function currentMode(s: Settings = readSettings()): Mode {
+  return !s.enabled ? "off" : s.mode;
+}
+
 interface Settings {
   enabled: boolean;
+  mode: "auto" | "manual";
   debounceMs: number;
   endpoint: string;
   model: string;
@@ -50,6 +91,7 @@ function readSettings(): Settings {
   const c = vscode.workspace.getConfiguration("sensai");
   return {
     enabled: c.get("enabled", true),
+    mode: c.get<string>("mode", "auto") === "manual" ? "manual" : "auto",
     endpoint: c.get("endpoint", "http://127.0.0.1:3456"),
     model: c.get("model", "claude-opus-5"),
     apiKey: c.get("apiKey", ""),
@@ -70,16 +112,99 @@ function readSettings(): Settings {
  * 只改使用者設定會被它蓋掉，按了沒反應。都沒寫才寫使用者設定 —— 暫時關掉
  * 通常是「我這台機器先不要」，不該變成 commit 進版控的專案設定。
  */
-async function setEnabled(enabled: boolean): Promise<void> {
+async function writeSetting(key: "enabled" | "mode", value: unknown): Promise<void> {
   const c = vscode.workspace.getConfiguration("sensai");
-  const info = c.inspect<boolean>("enabled");
+  const info = c.inspect(key);
   const target =
     info?.workspaceValue !== undefined
       ? vscode.ConfigurationTarget.Workspace
       : vscode.ConfigurationTarget.Global;
-  await c.update("enabled", enabled, target);
+  await c.update(key, value, target);
+}
+
+async function setEnabled(enabled: boolean): Promise<void> {
+  await writeSetting("enabled", enabled);
   void vscode.window.showInformationMessage(
     enabled ? "sensAI：已開啟。" : "sensAI：已暫時關閉，不會再送出任何審查。",
+  );
+}
+
+/** 切換到某個模式。寫入的層級規則同 setEnabled。 */
+async function setMode(mode: Mode): Promise<void> {
+  if (mode === "off") {
+    await setEnabled(false);
+    return;
+  }
+  if (readSettings().mode !== mode) {
+    await writeSetting("mode", mode);
+  }
+  if (!readSettings().enabled) {
+    await writeSetting("enabled", true);
+  }
+  void vscode.window.showInformationMessage(
+    mode === "auto"
+      ? "sensAI：自動模式，存檔就會審查。"
+      : "sensAI：手動模式，存檔不再審查。改完一組後按 ▶ 審查改動。",
+  );
+}
+
+/** 讓使用者從三種模式裡挑一個。 */
+async function pickMode(): Promise<void> {
+  const now = currentMode();
+  const items: Array<vscode.QuickPickItem & { mode: Mode }> = [
+    { mode: "auto", label: MODE_LABEL.auto, detail: "存檔就審查改動的地方（原本的行為）" },
+    {
+      mode: "manual",
+      label: MODE_LABEL.manual,
+      detail: "存檔不審查。改完一組後按 ▶ 審查改動，一次審整組改動，可以跨多個檔案",
+    },
+    { mode: "off", label: "$(eye-closed) 關閉", detail: "不送出任何審查" },
+  ];
+  for (const item of items) {
+    if (item.mode === now) {
+      item.description = "目前";
+    }
+  }
+  const pick = await vscode.window.showQuickPick(items, {
+    title: "sensAI 模式",
+    placeHolder: "選擇 sensAI 什麼時候審查",
+  });
+  if (pick && pick.mode !== now) {
+    await setMode(pick.mode);
+  }
+}
+
+/** 審查整組改動在 inFlightAborts、面板取消鈕上用的 key。不會跟檔案路徑撞到。 */
+const CHANGESET_KEY = "sensai:changeset";
+
+/** 審查改動時，一個讀好、算好範圍與上下文的改動檔案。 */
+interface PreparedFile {
+  file: ChangedFile;
+  source: string;
+  /** 審查範圍（改動處與所在函式）。null 代表整份。 */
+  scope: LineRange[] | null;
+  ctx: ReviewContext;
+  /** 命中 never_send 的路徑（檔案本身或它 include 的 header）。非空就不送。 */
+  blocked: string[];
+}
+
+function toRel(root: string, p: string): string {
+  return path.relative(root, p).split(path.sep).join("/");
+}
+
+function blockedReason(p: PreparedFile, root: string): string {
+  const hits = p.blocked.filter((b) => path.resolve(b) !== path.resolve(p.file.filePath));
+  return hits.length === 0
+    ? "命中 privacy.never_send"
+    : `include 的 ${hits.map((h) => toRel(root, h)).join("、")} 命中 privacy.never_send`;
+}
+
+/** 勾選清單上顯示的大小估計：原始碼加上合併後（受預算限制）的 header。 */
+function estimateBytes(chosen: PreparedFile[], budget: number): number {
+  const targets = new Set(chosen.map((p) => path.resolve(p.file.filePath)));
+  const { headers } = mergeHeaders(chosen.map((p) => p.ctx), targets, budget);
+  return (
+    chosen.reduce((n, p) => n + p.source.length, 0) + headers.reduce((n, h) => n + h.text.length, 0)
   );
 }
 
@@ -127,6 +252,8 @@ class Controller {
    * 檔增刪時 invalidateIndex()。workspace root 變了才重建。
    */
   private fileAccess: CachingFileAccess | undefined;
+  /** 審查改動正在整理檔案或等使用者勾選。 */
+  private preparingChangeset = false;
   private fileAccessRoot: string | undefined;
 
   constructor(
@@ -240,7 +367,8 @@ class Controller {
     if (!this.owedFullReview.delete(filePath)) {
       return;
     }
-    if (!readSettings().enabled) {
+    // 補做的完整審查是存檔觸發的延續，只有自動模式才做。
+    if (currentMode() !== "auto") {
       return;
     }
     const document = this.documents.get(filePath);
@@ -272,6 +400,10 @@ class Controller {
     // 關掉就是完全不外送，手動觸發也一樣。入口處都擋過了，這裡是最後一道：
     // 關掉之前就排進 SingleFlight 的補跑、清除靜音觸發的重審，都會走到這裡。
     if (!settings.enabled) {
+      return;
+    }
+    // 存檔觸發只在自動模式跑。切到手動之前就排進 SingleFlight 的補跑會走到這裡。
+    if (trigger === "save" && settings.mode !== "auto") {
       return;
     }
     const source = document.getText();
@@ -343,7 +475,7 @@ class Controller {
     // 面板已有結果時不要清空回「審查中」—— 連續存檔會一輪輪蓋掉剛顯示的意見，
     // 造成空窗。留著上一輪結果、只在頂部標「更新中」，等新結果到位再蓋過去。
     if (this.panel.hasResult()) {
-      this.panel.markUpdating();
+      this.panel.markUpdating(filePath);
     } else {
       this.panel.setState({
         kind: "reviewing",
@@ -621,7 +753,12 @@ class Controller {
   cancelReview(filePath?: string): void {
     // 面板會指名要取消哪個檔案（它顯示的就是那個檔案的結果）。
     // 從命令面板叫進來時沒有指名，才退回目前這個分頁。
-    const target = filePath ?? vscode.window.activeTextEditor?.document.uri.fsPath;
+    // 審查改動進行中時，從命令面板取消的就是它 —— 那是使用者最可能想停的。
+    const target =
+      filePath ??
+      (this.inFlightAborts.has(CHANGESET_KEY)
+        ? CHANGESET_KEY
+        : vscode.window.activeTextEditor?.document.uri.fsPath);
     if (!target) {
       return;
     }
@@ -671,6 +808,13 @@ class Controller {
       reason,
       mutedAt: new Date().toISOString(),
     });
+
+    // 審查改動的結果、或手動模式下的任何結果：直接從畫面上拿掉。為了一則意見
+    // 重送整組改動又慢又貴，手動模式也不該自己送出請求。
+    if (this.panel.showingChangeset() || currentMode() === "manual") {
+      this.panel.removeFinding(finding);
+      return;
+    }
 
     // 重審剛靜音的那個檔案，不是前景那個。
     const document = this.documents.get(filePath);
@@ -811,6 +955,13 @@ class Controller {
     void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆本機靜音。`);
     // 被靜音擋掉的意見要重新出現，得再審一次 —— 面板上的舊結果是套用過
     // 靜音之後的，清了不重審的話畫面不會有任何變化，看起來像沒生效。
+    // 手動模式不自己送出請求：意見會在下一次審查時重新出現。
+    if (currentMode() === "manual") {
+      if (n > 0) {
+        this.output.appendLine("[mutes] 手動模式：被靜音的意見會在下一次審查時重新出現。");
+      }
+      return;
+    }
     const document = vscode.window.activeTextEditor?.document;
     if (n > 0 && document) {
       await this.review(document);
@@ -822,6 +973,384 @@ class Controller {
     const n = this.pins.clear();
     this.panel.setPins(this.pins.all());
     void vscode.window.showInformationMessage(`sensAI：已清除 ${n} 筆釘選。`);
+  }
+
+  /**
+   * 從自動切到手動時呼叫。
+   *
+   * 還沒送出的存檔審查（在等去抖動的、burst 欠下的完整審查）收掉；已經在跑的
+   * 讓它跑完 —— 那是切換之前就送出去的，結果仍然有用。
+   */
+  stopSaveReviews(): void {
+    this.debouncer.cancelAll();
+    this.owedFullReview.clear();
+    this.output.appendLine("[review] 手動模式：存檔不再觸發審查。");
+  }
+
+  /**
+   * 手動模式的「審查改動」：把相對 HEAD 改過的檔案整組送審。
+   *
+   * 跟存檔審查的差別在於範圍 —— 存檔時只看得到那一個檔案剛存下的那一塊，
+   * 改動跨好幾個檔案時，其他相關的部分可能還沒改，審出來的是做到一半的狀態。
+   * 這裡等使用者說「改完了」，再把整組放進同一個請求，模型才看得到跨檔案的不一致。
+   */
+  async reviewChanges(): Promise<void> {
+    // 整理改動與勾選清單開著的期間，再按一次不要疊出第二份清單。
+    if (this.preparingChangeset) {
+      return;
+    }
+    this.preparingChangeset = true;
+    try {
+      await this.reviewChangesUnguarded();
+    } finally {
+      this.preparingChangeset = false;
+    }
+  }
+
+  private async reviewChangesUnguarded(): Promise<void> {
+    const root = this.workspaceRoot;
+    if (!root) {
+      void vscode.window.showWarningMessage("sensAI：請先開啟一個資料夾。");
+      return;
+    }
+    if (this.inFlightAborts.has(CHANGESET_KEY)) {
+      void vscode.window.showInformationMessage(
+        "sensAI：上一次的審查改動還在進行中，可以在面板上取消。",
+      );
+      return;
+    }
+
+    // git diff 只看得到磁碟上的內容。還沒存檔的編輯不能偷偷用舊內容審。
+    const dirty = vscode.workspace.textDocuments.filter(
+      (d) =>
+        d.isDirty &&
+        d.uri.scheme === "file" &&
+        detectLanguage(d.uri.fsPath) !== null &&
+        !path.relative(root, d.uri.fsPath).startsWith(".."),
+    );
+    if (dirty.length > 0) {
+      const names = dirty.map((d) => path.basename(d.uri.fsPath)).join("、");
+      const SAVE = "全部存檔並審查";
+      const pick = await vscode.window.showWarningMessage(
+        `有 ${dirty.length} 個檔案還沒存檔：${names}。審查的是存檔後的內容。`,
+        { modal: true },
+        SAVE,
+      );
+      if (pick !== SAVE) {
+        return;
+      }
+      for (const d of dirty) {
+        if (!(await d.save())) {
+          void vscode.window.showWarningMessage(`sensAI：${path.basename(d.uri.fsPath)} 存檔失敗，已取消審查。`);
+          return;
+        }
+      }
+    }
+
+    let changed: ChangedFile[];
+    try {
+      changed = await listChangedFiles(root);
+    } catch (err) {
+      void vscode.window.showWarningMessage(`sensAI：${(err as Error).message}`);
+      return;
+    }
+    if (changed.length === 0) {
+      void vscode.window.showInformationMessage("sensAI：相對 HEAD 沒有改動的 C 或組語檔案。");
+      return;
+    }
+
+    const settings = readSettings();
+    const fa = this.getFileAccess(root);
+    this.setStatus("$(sync~spin) sensAI", "整理改動中");
+    const prepared = (
+      await Promise.all(changed.map((f) => this.prepareChangedFile(f, root, settings, fa)))
+    ).filter((p): p is PreparedFile => p !== null);
+    this.setStatus("$(debug-pause) sensAI", "手動模式");
+
+    const selected = await this.pickChangedFiles(prepared, settings);
+    if (!selected || selected.length === 0) {
+      return;
+    }
+    const excluded = prepared
+      .filter((p) => p.blocked.length > 0)
+      .map((p) => ({ file: p.file.relPath, reason: blockedReason(p, root) }));
+    // 送出之後就交給面板的取消鈕管，防重入的旗標到這裡為止。
+    this.preparingChangeset = false;
+    await this.runChangesetReview(selected, excluded, root, settings);
+  }
+
+  /** 讀出一個改動檔案、算好審查範圍與上下文。讀不到或其實沒改動回 null。 */
+  private async prepareChangedFile(
+    file: ChangedFile,
+    root: string,
+    settings: Settings,
+    fa: CachingFileAccess,
+  ): Promise<PreparedFile | null> {
+    let source: string;
+    try {
+      source = await fs.promises.readFile(file.filePath, "utf8");
+    } catch {
+      this.output.appendLine(`[changes] 讀不到 ${file.relPath}，略過。`);
+      return null;
+    }
+    // 未追蹤的檔案整份都是改動，不必再問 git。
+    const ranges = file.untracked ? null : await changedRanges(file.filePath, gitCwd(file.filePath));
+    if (ranges !== null && ranges.length === 0) {
+      return null;
+    }
+    const scope = ranges === null ? null : expandToEnclosingFunction(source, ranges);
+    const ctx = await buildContext(
+      file.filePath,
+      source,
+      {
+        workspaceRoot: root,
+        language: file.language,
+        depth: settings.includeDepth,
+        budgetBytes: settings.contextBudgetBytes,
+      },
+      fa,
+    );
+    return { file, source, scope, ctx, blocked: blockedPaths(ctx, this.config, root) };
+  }
+
+  /**
+   * 列出這次要送審的檔案讓使用者勾選。命中 never_send 的列在下方但不能勾。
+   * 改動量大時只警告，送多少由使用者決定。取消回 undefined。
+   */
+  private pickChangedFiles(
+    prepared: PreparedFile[],
+    settings: Settings,
+  ): Promise<PreparedFile[] | undefined> {
+    const sendable = prepared.filter((p) => p.blocked.length === 0);
+    const blocked = prepared.filter((p) => p.blocked.length > 0);
+    if (sendable.length === 0) {
+      void vscode.window.showWarningMessage(
+        "sensAI：改動的檔案全部命中 privacy.never_send，沒有可以送出的內容。",
+      );
+      return Promise.resolve(undefined);
+    }
+
+    type Item = vscode.QuickPickItem & { prepared?: PreparedFile };
+    const root = this.workspaceRoot ?? "";
+    const items: Item[] = sendable.map((p) => ({
+      label: p.file.relPath,
+      description: p.file.untracked
+        ? "新檔案"
+        : `+${p.file.added ?? "?"} −${p.file.deleted ?? "?"}`,
+      detail: `${p.scope === null ? "審查整份" : `審查第 ${describeRanges(p.scope)} 行`} · ${
+        LANGUAGE_LABEL[p.file.language]
+      } · ${formatBytes(p.source.length)}`,
+      prepared: p,
+    }));
+    for (const p of blocked) {
+      items.push({
+        label: `🔒 ${p.file.relPath} 不會送出：${blockedReason(p, root)}`,
+        kind: vscode.QuickPickItemKind.Separator,
+      });
+    }
+
+    const qp = vscode.window.createQuickPick<Item>();
+    qp.canSelectMany = true;
+    qp.ignoreFocusOut = true;
+    qp.items = items;
+    qp.selectedItems = items.filter((i) => i.prepared);
+    const refresh = () => {
+      const chosen = qp.selectedItems.flatMap((i) => (i.prepared ? [i.prepared] : []));
+      const bytes = estimateBytes(chosen, settings.contextBudgetBytes);
+      qp.title = `sensAI：審查改動（已選 ${chosen.length} 個檔案，約 ${formatBytes(bytes)}）`;
+      qp.placeholder =
+        changesetWarning(chosen.length, bytes) ?? "確認要送出的檔案，按 Enter 開始審查";
+    };
+    refresh();
+
+    return new Promise((resolve) => {
+      let done = false;
+      qp.onDidChangeSelection(refresh);
+      qp.onDidAccept(() => {
+        done = true;
+        resolve(qp.selectedItems.flatMap((i) => (i.prepared ? [i.prepared] : [])));
+        qp.hide();
+      });
+      qp.onDidHide(() => {
+        if (!done) {
+          resolve(undefined);
+        }
+        qp.dispose();
+      });
+      qp.show();
+    });
+  }
+
+  /** 把選好的檔案整組送審，結果依檔案分組顯示在面板上。 */
+  private async runChangesetReview(
+    selected: PreparedFile[],
+    excluded: Array<{ file: string; reason: string }>,
+    root: string,
+    settings: Settings,
+  ): Promise<void> {
+    // 勾選期間可能被關掉或切回自動模式。
+    if (currentMode() !== "manual") {
+      return;
+    }
+    const targets: ChangesetTarget[] = selected.map((p) => ({
+      filePath: p.file.filePath,
+      relPath: p.file.relPath,
+      source: p.source,
+      language: p.file.language,
+      scope: p.scope,
+    }));
+    const merged = mergeHeaders(
+      selected.map((p) => p.ctx),
+      new Set(targets.map((t) => path.resolve(t.filePath))),
+      settings.contextBudgetBytes,
+    );
+    const cs: ChangesetContext = {
+      targets,
+      headers: merged.headers.map((h) => ({ path: toRel(root, h.path), text: h.text })),
+      truncated: merged.truncated,
+    };
+    const languages = new Set(targets.map((t) => t.language));
+    const rules = this.rules.filter((r) => r.languages.some((l) => languages.has(l)));
+    for (const lang of languages) {
+      if (!rules.some((r) => r.languages.includes(lang))) {
+        this.output.appendLine(
+          `[changes] 沒有適用於${LANGUAGE_LABEL[lang]}的規則，這類檔案只檢查語法。`,
+        );
+      }
+    }
+
+    const abort = new AbortController();
+    this.inFlightAborts.set(CHANGESET_KEY, abort);
+    if (this.panel.hasResult()) {
+      this.panel.markUpdating(CHANGESET_KEY);
+    } else {
+      this.panel.setState({
+        kind: "reviewing",
+        filePath: CHANGESET_KEY,
+        file: `審查改動（${targets.length} 個檔案）`,
+      });
+    }
+    this.panel.reveal();
+    this.setStatus("$(sync~spin) sensAI", `審查改動中（${targets.length} 個檔案）`);
+    this.output.appendLine(
+      `[changes] 審查改動：${targets
+        .map((t) => `${t.relPath}（${t.scope === null ? "整份" : `第 ${describeRanges(t.scope)} 行`}）`)
+        .join("、")}`,
+    );
+
+    const started = Date.now();
+    const bytes =
+      targets.reduce((n, t) => n + t.source.length, 0) +
+      cs.headers.reduce((n, h) => n + h.text.length, 0);
+    const writeAudit = (outcome: "ok" | "failed" | "cancelled", findings = 0, dropped = 0) => {
+      appendAudit(root, this.config, {
+        ts: new Date().toISOString(),
+        outcome,
+        file: targets.map((t) => t.relPath).join(", "),
+        headers: cs.headers.length,
+        bytes,
+        endpoint: settings.endpoint,
+        model: settings.model,
+        findings,
+        dropped,
+        durationMs: Date.now() - started,
+      });
+    };
+
+    try {
+      const raw = await requestChangesetReview(cs, rules, {
+        endpoint: settings.endpoint,
+        model: settings.model,
+        apiKey: settings.apiKey || undefined,
+        signal: abort.signal,
+        timeoutMs: settings.requestTimeoutMs,
+        archId: this.config.assemblyArch,
+        onUnknownRuleId: (id: string) => {
+          this.output.appendLine(`[review] 模型回報了不存在的規則 id「${id}」，已改記為無規則。`);
+        },
+      });
+
+      const { byFile, unknown } = assignFindings(raw, targets.map((t) => t.relPath));
+      for (const f of unknown) {
+        this.output.appendLine(
+          `[filter] 濾除 (unknown-file) ${f.line} 行：${f.message}（模型回報的檔案對不上任何送審的檔案）`,
+        );
+      }
+      // 跨檔案的意見會引用另一個檔案的識別字，evidence 要對整組內容比對。
+      const corpus = [...targets.map((t) => t.source), ...cs.headers.map((h) => h.text)].join("\n");
+      let kept = 0;
+      let droppedCount = unknown.length;
+      const files: ReviewResult[] = targets.map((t) => {
+        const lines = t.source.split("\n");
+        const isMuted = (f: Finding) => this.mutes?.has(muteKey(f, lines[f.line - 1] ?? "")) ?? false;
+        const r = filterFindings(byFile.get(t.relPath) ?? [], t.source, isMuted, t.scope, corpus);
+        for (const d of r.dropped) {
+          this.output.appendLine(
+            `[filter] 濾除 (${d.reason}) ${t.relPath}:${d.finding.line}：${d.finding.message}`,
+          );
+        }
+        const { shown, collapsed } = applySeverityBudget(r.kept, settings.maxFindings);
+        kept += r.kept.length;
+        droppedCount += r.dropped.length;
+        // 跳行、靜音、釘選都要用「審查當下」的內容算那一行。
+        this.lastSource.set(t.filePath, t.source);
+        return {
+          filePath: t.filePath,
+          displayPath: t.relPath,
+          sourceLines: lines,
+          findings: shown,
+          collapsed,
+          dropped: r.dropped,
+          durationMs: Date.now() - started,
+          completedAt: Date.now(),
+          headersIncluded: [],
+          contextTruncated: false,
+        };
+      });
+      const stale = targets.some((t) => {
+        const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === t.filePath);
+        return doc !== undefined && doc.getText() !== t.source;
+      });
+
+      this.panel.setState({
+        kind: "changeset",
+        result: {
+          files,
+          excluded,
+          unassigned: unknown.length,
+          durationMs: Date.now() - started,
+          completedAt: Date.now(),
+          headersIncluded: cs.headers.length,
+          contextTruncated: cs.truncated,
+          stale,
+        },
+      });
+      writeAudit("ok", kept, droppedCount);
+      this.setStatus(
+        kept === 0 ? "$(check) sensAI" : `$(comment-discussion) sensAI ${kept}`,
+        kept === 0 ? "審查改動：沒有發現問題" : `審查改動：${kept} 則意見`,
+      );
+    } catch (err) {
+      writeAudit(err instanceof ReviewCancelledError ? "cancelled" : "failed");
+      if (err instanceof ReviewCancelledError) {
+        this.panel.setState({ kind: "idle" });
+        this.setStatus("$(circle-slash) sensAI", "已取消");
+        this.output.appendLine("[changes] 審查改動已取消。");
+      } else if (err instanceof EndpointUnavailableError) {
+        this.panel.setState({ kind: "unavailable", message: err.message });
+        this.setStatus("$(circle-slash) sensAI", err.message);
+        this.output.appendLine(`[changes] ${err.message}`);
+      } else {
+        const message = (err as Error).message ?? String(err);
+        this.panel.setState({ kind: "error", message });
+        this.setStatus("$(error) sensAI", message);
+        this.output.appendLine(`[changes] ${message}`);
+      }
+    } finally {
+      if (this.inFlightAborts.get(CHANGESET_KEY) === abort) {
+        this.inFlightAborts.delete(CHANGESET_KEY);
+      }
+    }
   }
 
   /**
@@ -857,20 +1386,32 @@ export function activate(context: vscode.ExtensionContext): void {
   status.text = "sensAI";
   status.show();
 
-  // 開關獨立一顆，主狀態列項目仍然是「打開面板」，兩者互不搶點擊。
-  // 排在主項目右邊（priority 較低）並帶文字，連起來讀是「sensAI 開啟中／已關閉」；
+  // 模式獨立一顆，主狀態列項目仍然是「打開面板」，兩者互不搶點擊。
+  // 排在主項目右邊（priority 較低）並帶文字，連起來讀是「sensAI 自動／手動／已關閉」；
   // 只放一個圖示的話，看起來像主項目的裝飾，使用者找不到。
-  const toggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
-  toggle.command = "sensai.toggle";
-  const renderToggle = () => {
-    const enabled = readSettings().enabled;
-    toggle.text = enabled ? "$(eye) 開啟中" : "$(eye-closed) 已關閉";
-    toggle.tooltip = enabled
-      ? "sensAI：運作中。點一下暫時關閉"
-      : "sensAI：已關閉，不會送出任何審查（包括手動）。點一下重新開啟";
-    toggle.show();
+  const modeItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+  modeItem.command = "sensai.pickMode";
+  // 手動模式才出現：面板沒打開時，也找得到審查改動的按鈕。
+  const reviewChangesItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
+  reviewChangesItem.command = "sensai.reviewChanges";
+  reviewChangesItem.text = "$(play) 審查改動";
+  reviewChangesItem.tooltip = "sensAI：把相對 HEAD 改過的檔案整組送審";
+  const renderMode = () => {
+    const mode = currentMode();
+    modeItem.text = MODE_LABEL[mode];
+    modeItem.tooltip = {
+      auto: "sensAI 自動模式：存檔就審查。點一下切換模式",
+      manual: "sensAI 手動模式：存檔不審查，按 ▶ 審查改動才送出。點一下切換模式",
+      off: "sensAI 已關閉：不會送出任何審查（包括手動）。點一下切換模式",
+    }[mode];
+    modeItem.show();
+    if (mode === "manual") {
+      reviewChangesItem.show();
+    } else {
+      reviewChangesItem.hide();
+    }
   };
-  renderToggle();
+  renderMode();
 
   let controller: Controller;
   const panel = new FindingsPanel({
@@ -896,12 +1437,14 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     status,
-    toggle,
+    modeItem,
+    reviewChangesItem,
     { dispose: () => controller.dispose() },
     vscode.window.registerWebviewViewProvider(FindingsPanel.viewId, panel),
 
     vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (readSettings().enabled) {
+      // 手動模式存檔不審查；那是這個模式存在的理由。
+      if (currentMode() === "auto") {
         controller.reviewOnSave(doc);
       }
     }),
@@ -946,15 +1489,44 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sensai.toggle", () => setEnabled(!readSettings().enabled)),
     vscode.commands.registerCommand("sensai.enable", () => setEnabled(true)),
     vscode.commands.registerCommand("sensai.disable", () => setEnabled(false)),
+    vscode.commands.registerCommand("sensai.pickMode", () => pickMode()),
+    // 面板標題列的模式按鈕：三個指令各帶自己的圖示，依目前模式只顯示其中一個。
+    vscode.commands.registerCommand("sensai.modeMenu.auto", () => pickMode()),
+    vscode.commands.registerCommand("sensai.modeMenu.manual", () => pickMode()),
+    vscode.commands.registerCommand("sensai.modeMenu.off", () => pickMode()),
+    vscode.commands.registerCommand("sensai.reviewChanges", async () => {
+      // 這個功能只屬於手動模式。從快捷鍵之類的地方在別的模式叫到時，問一聲再切。
+      const mode = currentMode();
+      if (mode !== "manual") {
+        const SWITCH = "切換到手動模式並審查";
+        const pick = await vscode.window.showInformationMessage(
+          mode === "off"
+            ? "sensAI 目前已關閉，不會送出任何審查。"
+            : "「審查改動」只在手動模式下使用；自動模式會在存檔時審查。",
+          SWITCH,
+        );
+        if (pick !== SWITCH) {
+          return;
+        }
+        await setMode("manual");
+      }
+      await controller.reviewChanges();
+    }),
 
-    // 不論是從指令、狀態列還是直接改 settings.json 關掉，都走這裡收尾。
+    // 不論是從指令、狀態列還是直接改 settings.json 切換，都走這裡收尾。
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (!event.affectsConfiguration("sensai.enabled")) {
+      if (
+        !event.affectsConfiguration("sensai.enabled") &&
+        !event.affectsConfiguration("sensai.mode")
+      ) {
         return;
       }
-      renderToggle();
-      if (!readSettings().enabled) {
+      renderMode();
+      const mode = currentMode();
+      if (mode === "off") {
         controller.stopAllReviews();
+      } else if (mode === "manual") {
+        controller.stopSaveReviews();
       }
     }),
   );

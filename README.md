@@ -25,6 +25,8 @@ similar hardware conventions.
 - Requires source-grounded evidence and drops fabricated references.
 - Keeps suggestions in a dedicated panel rather than asserting that AI output
   is a compiler error.
+- Manual mode: turn off review-on-save, then review a whole change set —
+  several functions across several files — in one request when you are done.
 - Pin findings you want to keep. Pinned findings stay in a fixed section at the
   top of the panel across reviews and restarts, each with a note box for your
   own comments.
@@ -70,7 +72,8 @@ enabling reviews on confidential firmware repositories.
 
 | Setting | Default | Purpose |
 |---|---:|---|
-| `sensai.enabled` | `true` | Master switch; when on, supported files are reviewed on save. Toggle it from the eye button in the sensAI panel's title bar, the "開啟中 / 已關閉" item in the status bar, or **sensAI: Toggle On/Off**. Off means nothing is sent at all: pending and in-flight reviews are cancelled, and **Review Current File** is refused too. The panel and pinned findings stay viewable. |
+| `sensai.enabled` | `true` | Master switch. Off means nothing is sent at all: pending and in-flight reviews are cancelled, and **Review Current File** is refused too. The panel and pinned findings stay viewable. |
+| `sensai.mode` | `auto` | When to review while enabled. `auto` reviews on save. `manual` never reviews on save: when a change is done, press **▶ Review Changes** (sensAI panel title bar or status bar) to send every C/assembly file changed relative to git HEAD in one request, so cross-file inconsistencies are visible. Switch between auto, manual and off from the mode button in the panel's title bar or status bar, or **sensAI: Switch Mode**. |
 | `sensai.debounceMs` | `1000` | Quiet period after a save before the review is sent; `0` sends immediately. |
 | `sensai.endpoint` | `http://127.0.0.1:3456` | Router endpoint. |
 | `sensai.model` | `claude-opus-5` | Router model key. |
@@ -123,7 +126,9 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 | `sensAI: Reload Rules` | 重新載入規則。 |
 | `sensAI: Export False Positive Report` | 匯出本機誤報記錄。 |
 | `sensAI: Clear Local Mutes` | 清除本機靜音。 |
-| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI，也可點 sensAI 側欄標題列的眼睛按鈕，或狀態列右下的「👁 開啟中／已關閉」。關閉後不會送出任何審查，手動審查也一樣。 |
+| `sensAI: Switch Mode` | 切換自動／手動／關閉三種模式，也可點 sensAI 側欄標題列或狀態列右下的模式按鈕。 |
+| `sensAI: Review Changes` | 手動模式專用：把相對 HEAD 改過的檔案整組送審，同側欄標題列與狀態列的 ▶ 按鈕。 |
+| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI，重新開啟時回到原本的模式。關閉後不會送出任何審查，手動審查也一樣。 |
 
 ### 觸發時機
 
@@ -135,6 +140,36 @@ W1C 暫存器、ISR 安全性與組語 ABI。
 檔案 —— 「無法判定」不等於「沒有改動」。
 
 `sensAI: Review Current File` 不受此限制，一律照審。
+
+### 三種模式
+
+| 模式 | 存檔時 | ▶ 審查改動 | `Review Current File` |
+|---|---|---|---|
+| 自動（預設） | 審查 | 不顯示 | 可用 |
+| 手動 | 不審查 | 整組送審 | 可用 |
+| 關閉 | 不審查 | 不顯示 | 擋下 |
+
+切換模式：點 sensAI 側欄標題列或狀態列右下的模式按鈕，或執行 `sensAI: Switch Mode`。
+設定存在 `sensai.enabled`（總開關）與 `sensai.mode`（`auto`／`manual`）。
+
+### 手動模式：審查一整組改動
+
+存檔就審查時，一個改動如果要跨好幾個函式、好幾個檔案，存檔當下其他相關的地方
+常常還沒改，審出來的是做到一半的狀態。手動模式下存檔不會審查；改完一組後按
+**▶ 審查改動**：
+
+1. 有還沒存檔的 C／組語檔案時，先問要不要全部存檔。審查的是存檔後的內容。
+2. 列出工作區裡相對 git HEAD 改過的 `.c`、`.h`、`.s`、`.S`（含未追蹤的新檔案），
+   每個檔案附上增刪行數與審查範圍，全部預設勾選。可以取消勾選不相關的檔案。
+3. 命中 `privacy.never_send` 的檔案（本身命中，或它 include 的 header 命中）列在
+   清單下方標 🔒，不會送出，其他檔案照送。
+4. 改動超過 10 個檔案或約 300 KB 時，清單上會警告，但不會擋。
+5. 按 Enter 後，所選的檔案放在**同一個請求**送審，範圍是改動的行加上所在的函式，
+   模型看得到跨檔案的不一致，例如 header 改了簽名但呼叫端沒跟上。
+6. 結果依檔案分組顯示在側欄。跳行、釘選、標成誤報都會作用在意見所屬的檔案；
+   標成誤報只會把那則意見從畫面拿掉，不會重送整組。
+
+自動模式的規則（去抖動、合併、連續存檔時降級）完全不變。
 
 ### 釘選意見
 

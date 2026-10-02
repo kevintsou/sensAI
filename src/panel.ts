@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
-import { Finding, PinnedFinding, ReviewResult } from "./types";
+import { ChangesetResult, Finding, PinnedFinding, ReviewResult } from "./types";
 import { pinKey } from "./pins";
 
 export type PanelState =
   | { kind: "idle" }
   | { kind: "reviewing"; file: string; filePath: string }
   | { kind: "result"; result: ReviewResult }
+  /** 手動模式「審查改動」的結果：多個檔案，依檔案分組。 */
+  | { kind: "changeset"; result: ChangesetResult }
   | { kind: "skipped"; file: string; reason: string }
   | { kind: "unavailable"; message: string }
   | { kind: "error"; message: string };
@@ -19,7 +21,7 @@ export interface PanelHandlers {
    */
   onJump(filePath: string, line: number): void;
   onMute(finding: Finding, filePath: string): void;
-  /** 釘選一則目前顯示的意見（index 對應 this.findings）。 */
+  /** 釘選一則目前顯示的意見（從面板上的那則意見帶出所屬檔案）。 */
   onPin(finding: Finding, filePath: string): void;
   /** 取消釘選。 */
   onUnpin(key: string): void;
@@ -56,17 +58,38 @@ const SEVERITY_LABEL: Record<Finding["severity"], string> = {
   info: "info",
 };
 
+/**
+ * 面板上的一則意見，連同它屬於哪個檔案、產生它時的原始碼。
+ *
+ * 動作（跳行、誤報、釘選）一律從這裡取檔案路徑，不另外查 —— 審查整組改動時
+ * 一個畫面上有好幾個檔案的意見，只靠「目前結果的檔案」會作用到錯的地方。
+ */
+interface Entry {
+  finding: Finding;
+  filePath: string;
+  sourceLines: string[];
+}
+
+function entriesOf(r: ReviewResult): Entry[] {
+  return [...r.findings, ...(r.collapsed ?? [])].map((finding) => ({
+    finding,
+    filePath: r.filePath,
+    sourceLines: r.sourceLines,
+  }));
+}
+
 export class FindingsPanel implements vscode.WebviewViewProvider {
   public static readonly viewId = "sensai.findings";
 
   private view: vscode.WebviewView | undefined;
   private state: PanelState = { kind: "idle" };
-  private findings: Finding[] = [];
+  /** 目前畫面上的意見，順序跟 render 時的索引一致。 */
+  private entries: Entry[] = [];
   private pins: PinnedFinding[] = [];
-  /** 目前這批結果對應的原始碼，逐行。算釘選 key 用。 */
-  private sourceLines: string[] = [];
   /** 新一輪審查進行中，但畫面上還留著上一輪的結果。只在有結果可留時為 true。 */
   private updating = false;
+  /** 「更新中」時進行中的那輪審查的取消 key。 */
+  private updatingKey: string | undefined;
 
   constructor(private readonly handlers: PanelHandlers) {}
 
@@ -82,31 +105,30 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         text?: string;
         filePath?: string;
       }) => {
-        // 主結果區的動作一律配這批結果自己的檔案，不看前景分頁。
-        // 渲染（例如釘選勾選框的狀態）用的也是同一個路徑，兩邊才會一致。
-        const file = this.resultFilePath();
-        if (msg.type === "jump" && typeof msg.line === "number" && file) {
-          this.handlers.onJump(file, msg.line);
+        // 主結果區的動作一律從意見自己的 entry 取檔案，不看前景分頁。
+        // 渲染（例如釘選勾選框的狀態）用的也是同一份資料，兩邊才會一致。
+        const entry = typeof msg.index === "number" ? this.entries[msg.index] : undefined;
+        if (msg.type === "jump" && entry) {
+          this.handlers.onJump(entry.filePath, entry.finding.line);
         } else if (msg.type === "jumpTo" && typeof msg.filePath === "string" && typeof msg.line === "number") {
           this.handlers.onJumpTo(msg.filePath, msg.line);
-        } else if (msg.type === "mute" && typeof msg.index === "number" && file) {
-          const finding = this.findings[msg.index];
-          if (finding) {
-            this.handlers.onMute(finding, file);
-          }
-        } else if (msg.type === "pin" && typeof msg.index === "number" && file) {
-          const finding = this.findings[msg.index];
-          if (finding) {
-            this.handlers.onPin(finding, file);
-          }
+        } else if (msg.type === "mute" && entry) {
+          this.handlers.onMute(entry.finding, entry.filePath);
+        } else if (msg.type === "pin" && entry) {
+          this.handlers.onPin(entry.finding, entry.filePath);
         } else if (msg.type === "unpin" && typeof msg.key === "string") {
           this.handlers.onUnpin(msg.key);
         } else if (msg.type === "comment" && typeof msg.key === "string" && typeof msg.text === "string") {
           // 只回存，不重繪 —— 重繪會把使用者正在打字的 textarea 清掉。
           this.handlers.onComment(msg.key, msg.text);
         } else if (msg.type === "cancel") {
-          // 更新中時面板留著上一輪結果，路徑同樣取自結果本身。
-          const target = file ?? (this.state.kind === "reviewing" ? this.state.filePath : undefined);
+          // 更新中時面板留著上一輪結果，要取消的是進行中的那一輪。
+          const target =
+            this.state.kind === "reviewing"
+              ? this.state.filePath
+              : this.updating
+                ? (this.updatingKey ?? this.resultFilePath())
+                : undefined;
           if (target) {
             this.handlers.onCancel(target);
           }
@@ -120,19 +142,53 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     this.state = state;
     // 任何新的明確狀態進來，就不再是「保留舊結果、更新中」了。
     this.updating = false;
+    this.updatingKey = undefined;
     // 收合的意見也要能按「這是誤報」，索引接在顯示的那些後面 —— 順序必須
-    // 跟 resultHtml 的 render 呼叫一致。
-    this.findings =
+    // 跟 resultHtml／changesetHtml 的 render 呼叫一致。
+    this.entries =
       state.kind === "result"
-        ? [...state.result.findings, ...(state.result.collapsed ?? [])]
-        : [];
-    this.sourceLines = state.kind === "result" ? state.result.sourceLines : [];
+        ? entriesOf(state.result)
+        : state.kind === "changeset"
+          ? state.result.files.flatMap(entriesOf)
+          : [];
     this.render();
   }
 
   /** 面板上是否已有可顯示的審查結果。 */
   hasResult(): boolean {
-    return this.state.kind === "result";
+    return this.state.kind === "result" || this.state.kind === "changeset";
+  }
+
+  /** 面板上顯示的是不是「審查改動」的結果。 */
+  showingChangeset(): boolean {
+    return this.state.kind === "changeset";
+  }
+
+  /**
+   * 從畫面上拿掉一則意見（標成誤報之後）。
+   *
+   * 單檔審查標誤報後會重審，結果自然就不含它；審查整組改動不能這樣做 ——
+   * 為了拿掉一則意見重送整組，又慢又貴，手動模式也不該自己送出請求。
+   */
+  removeFinding(finding: Finding): void {
+    const drop = (r: ReviewResult): ReviewResult => ({
+      ...r,
+      findings: r.findings.filter((f) => f !== finding),
+      collapsed: r.collapsed?.filter((f) => f !== finding),
+    });
+    const updating = this.updating;
+    const key = this.updatingKey;
+    if (this.state.kind === "changeset") {
+      this.setState({
+        kind: "changeset",
+        result: { ...this.state.result, files: this.state.result.files.map(drop) },
+      });
+    } else if (this.state.kind === "result") {
+      this.setState({ kind: "result", result: drop(this.state.result) });
+    }
+    this.updating = updating;
+    this.updatingKey = key;
+    this.render();
   }
 
   /** 目前顯示的這批結果是哪個檔案的。沒有結果時 undefined。 */
@@ -140,13 +196,6 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     return this.state.kind === "result" ? this.state.result.filePath : undefined;
   }
 
-  /**
-   * 面板上這批結果對應的原始碼行內容。釘選 key 要用它算，跟 Controller
-   * 存下來的審查當下版本一致，兩邊才會對得起來。
-   */
-  private lineTextFor(f: Finding): string {
-    return this.sourceLines[f.line - 1] ?? "";
-  }
 
   /**
    * 標記「新一輪審查進行中」，但**保留**畫面上現有的結果。
@@ -155,11 +204,12 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
    * 空白，造成一段空窗。改成留著舊結果、只在頂部加一條「更新中…」，等新結果
    * 到位再由 setState 蓋過去。只有已經有結果可留時才走這條路。
    */
-  markUpdating(): void {
-    if (this.state.kind !== "result") {
+  markUpdating(cancelKey?: string): void {
+    if (!this.hasResult()) {
       return;
     }
     this.updating = true;
+    this.updatingKey = cancelKey;
     this.render();
   }
 
@@ -225,7 +275,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
   private stateHtml(): string {
     switch (this.state.kind) {
       case "idle":
-        return `<p class="muted">存檔 C 檔案後會在這裡顯示審查結果。</p>`;
+        return `<p class="muted">自動模式存檔後、手動模式按 ▶ 審查改動後，結果會顯示在這裡。</p>`;
       case "reviewing":
         return `<p class="muted">審查中：${escapeHtml(this.state.file)}</p>
                 <button class="cancel" data-cancel>取消審查</button>`;
@@ -239,16 +289,115 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         return `<p class="bad">${escapeHtml(this.state.message)}</p>`;
       case "result":
         return this.resultHtml(this.state.result);
+      case "changeset":
+        return this.changesetHtml(this.state.result);
     }
+  }
+
+  /** 保留舊結果、新一輪進行中時，頂部一條輕量提示 + 取消鈕；不清畫面。 */
+  private updatingNoteHtml(): string {
+    return this.updating
+      ? `<div class="updating">↻ 更新中，仍顯示上一次的結果…
+           <button class="cancel inline" data-cancel>取消</button></div>`
+      : "";
+  }
+
+  /**
+   * 一則意見的 HTML。i 是它在 this.entries 裡的索引，所有按鈕都靠它找回
+   * 意見與檔案。
+   */
+  private findingHtml(i: number, pinnedKeys: ReadonlySet<string>): string {
+    const { finding: f, filePath, sourceLines } = this.entries[i];
+    const rule = f.rule_id ? `<span class="rule">${escapeHtml(f.rule_id)}</span>` : "";
+    const isPinned = pinnedKeys.has(pinKey(filePath, f, sourceLines[f.line - 1] ?? ""));
+    return `<div class="finding sev-${f.severity}">
+          <div class="row">
+            <label class="pin" title="釘住這則意見，不被後續審查蓋掉">
+              <input type="checkbox" data-index="${i}"${isPinned ? " checked" : ""}> 釘選
+            </label>
+            <span class="badge">${SEVERITY_LABEL[f.severity]}</span>
+            <button class="link" data-index="${i}">第 ${f.line} 行</button>
+            ${rule}
+          </div>
+          <div class="msg">${escapeHtml(f.message)}</div>
+          <dl>
+            <dt>觸發條件</dt><dd>${escapeHtml(f.trigger_condition)}</dd>
+            <dt>後果</dt><dd>${escapeHtml(f.consequence)}</dd>
+            <dt>依據</dt><dd>${escapeHtml(f.evidence)}</dd>
+          </dl>
+          <button class="mute" data-index="${i}">這是誤報</button>
+        </div>`;
+  }
+
+  /** 一個檔案的意見：顯示的那些，加上收合的那些。first 是它在 entries 裡的起點。 */
+  private fileFindingsHtml(r: ReviewResult, first: number, pinnedKeys: ReadonlySet<string>): string {
+    const collapsed = r.collapsed ?? [];
+    const items = r.findings.map((_, k) => this.findingHtml(first + k, pinnedKeys)).join("");
+    if (collapsed.length === 0) {
+      return items;
+    }
+    // 收合的部分用 <details>，預設關著但一鍵可展開 —— 意見還在，
+    // 只是不跟重要的那些搶注意力。藏到看不到就變成另一種問題了。
+    const hidden = collapsed
+      .map((_, k) => this.findingHtml(first + r.findings.length + k, pinnedKeys))
+      .join("");
+    return (
+      items +
+      `<details class="collapsed">
+        <summary>另有 ${collapsed.length} 則較低嚴重度的意見（意見過多，已收合）</summary>
+        ${hidden}
+      </details>`
+    );
+  }
+
+  private changesetHtml(cs: ChangesetResult): string {
+    const total = cs.files.reduce((n, r) => n + r.findings.length + (r.collapsed?.length ?? 0), 0);
+    const dropped = cs.files.reduce((n, r) => n + r.dropped.length, cs.unassigned);
+    const head = `${this.updatingNoteHtml()}<div class="meta">
+      <div>審查改動 · ${cs.files.length} 個檔案</div>
+      <div class="muted">${total} 則意見 ·
+        附帶 ${cs.headersIncluded} 個 header ·
+        ${(cs.durationMs / 1000).toFixed(1)}s${dropped > 0 ? ` · 濾除 ${dropped} 則` : ""}${
+          cs.contextTruncated ? " · 上下文已截斷" : ""
+        } · ${formatTime(cs.completedAt)}</div>
+    </div>${
+      cs.stale
+        ? `<div class="stale">審查期間有檔案又被改過，行號是對著送出當下那一版算的，跳行可能會偏。</div>`
+        : ""
+    }${cs.excluded
+      .map(
+        (e) =>
+          `<div class="excluded">🔒 未送出 ${escapeHtml(e.file)}：${escapeHtml(e.reason)}</div>`,
+      )
+      .join("")}`;
+
+    const pinnedKeys = new Set(this.pins.map((p) => p.key));
+    const clean: string[] = [];
+    const groups: string[] = [];
+    let first = 0;
+    for (const r of cs.files) {
+      const n = r.findings.length + (r.collapsed?.length ?? 0);
+      const name = escapeHtml(r.displayPath ?? r.filePath);
+      if (n === 0) {
+        clean.push(name);
+      } else {
+        groups.push(`<details class="file" open>
+          <summary>${name} <span class="muted">· ${n} 則</span></summary>
+          ${this.fileFindingsHtml(r, first, pinnedKeys)}
+        </details>`);
+      }
+      first += n;
+    }
+    const cleanNote =
+      clean.length > 0 ? `<p class="ok">沒有發現問題：${clean.join("、")}</p>` : "";
+    if (groups.length === 0) {
+      return head + `<p class="ok">沒有發現問題。</p>`;
+    }
+    return head + groups.join("") + cleanNote;
   }
 
   private resultHtml(result: ReviewResult): string {
     const collapsed = result.collapsed ?? [];
-    // 保留舊結果、新一輪進行中時，頂部一條輕量提示 + 取消鈕；不清畫面。
-    const updatingNote = this.updating
-      ? `<div class="updating">↻ 更新中，仍顯示上一次的結果…
-           <button class="cancel inline" data-cancel>取消</button></div>`
-      : "";
     const stageNote =
       result.stage === "changed"
         ? `<div class="stage">只看剛改動的行 · 完整審查進行中…</div>`
@@ -263,7 +412,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     const time =
       result.completedAt !== undefined ? ` · ${formatTime(result.completedAt)}` : "";
 
-    const head = `${updatingNote}<div class="meta">
+    const head = `${this.updatingNoteHtml()}<div class="meta">
       <div>${escapeHtml(result.filePath.split(/[\\/]/).pop() ?? result.filePath)}</div>
       <div class="muted">${result.findings.length} 則意見 ·
         附帶 ${result.headersIncluded.length} 個 header ·
@@ -275,51 +424,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     if (result.findings.length === 0 && collapsed.length === 0) {
       return head + `<p class="ok">沒有發現問題。</p>`;
     }
-
     const pinnedKeys = new Set(this.pins.map((p) => p.key));
-    const render = (f: Finding, i: number) => {
-        const rule = f.rule_id
-          ? `<span class="rule">${escapeHtml(f.rule_id)}</span>`
-          : "";
-        const isPinned = pinnedKeys.has(pinKey(result.filePath, f, this.lineTextFor(f)));
-        return `<div class="finding sev-${f.severity}">
-          <div class="row">
-            <label class="pin" title="釘住這則意見，不被後續審查蓋掉">
-              <input type="checkbox" data-index="${i}"${isPinned ? " checked" : ""}> 釘選
-            </label>
-            <span class="badge">${SEVERITY_LABEL[f.severity]}</span>
-            <button class="link" data-line="${f.line}">第 ${f.line} 行</button>
-            ${rule}
-          </div>
-          <div class="msg">${escapeHtml(f.message)}</div>
-          <dl>
-            <dt>觸發條件</dt><dd>${escapeHtml(f.trigger_condition)}</dd>
-            <dt>後果</dt><dd>${escapeHtml(f.consequence)}</dd>
-            <dt>依據</dt><dd>${escapeHtml(f.evidence)}</dd>
-          </dl>
-          <button class="mute" data-index="${i}">這是誤報</button>
-        </div>`;
-    };
-
-    const items = result.findings.map((f, i) => render(f, i)).join("");
-
-    if (collapsed.length === 0) {
-      return head + items;
-    }
-
-    // 收合的部分用 <details>，預設關著但一鍵可展開 —— 意見還在，
-    // 只是不跟重要的那些搶注意力。藏到看不到就變成另一種問題了。
-    const hidden = collapsed
-      .map((f, i) => render(f, result.findings.length + i))
-      .join("");
-    return (
-      head +
-      items +
-      `<details class="collapsed">
-        <summary>另有 ${collapsed.length} 則較低嚴重度的意見（意見過多，已收合）</summary>
-        ${hidden}
-      </details>`
-    );
+    return head + this.fileFindingsHtml(result, 0, pinnedKeys);
   }
 
   private html(): string {
@@ -351,6 +457,18 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
     margin-bottom: 8px;
   }
   .ok { color: var(--vscode-descriptionForeground); }
+  .excluded {
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.9em;
+    margin: 2px 0;
+  }
+  details.file { margin-bottom: 12px; }
+  details.file > summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-family: var(--vscode-editor-font-family);
+  }
   .bad { color: var(--vscode-errorForeground); }
   .meta { margin-bottom: 12px; }
   .meta > div:first-child { font-weight: 600; }
@@ -481,9 +599,9 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 ${this.bodyHtml()}
 <script nonce="${n}">
   const vscode = acquireVsCodeApi();
-  document.querySelectorAll("button.link[data-line]").forEach((b) => {
+  document.querySelectorAll("button.link[data-index]").forEach((b) => {
     b.addEventListener("click", () =>
-      vscode.postMessage({ type: "jump", line: Number(b.dataset.line) }));
+      vscode.postMessage({ type: "jump", index: Number(b.dataset.index) }));
   });
   document.querySelectorAll("button.link[data-jump-file]").forEach((b) => {
     b.addEventListener("click", () =>

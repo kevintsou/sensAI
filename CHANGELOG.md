@@ -2,6 +2,23 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Manual mode (`sensai.mode: manual`). Reviewing on save sees one file at the moment it was saved; when a change spans several functions and files, the related parts are often not edited yet, so the review judges a half-finished change. In manual mode saves are never reviewed. When the change is done, **▶ Review Changes** (panel title bar, status bar, or **sensAI: Review Changes**) lists every C/assembly file changed relative to git HEAD, untracked files included, with line counts and the scope to be reviewed. All are checked by default and can be unchecked. The selected files go to the model in **one request**, scoped to the changed lines plus their enclosing functions, with an explicit cross-file consistency check (a header signature changed but a caller did not follow, mismatched assumptions between caller and callee, assembly vs. C declarations).
+  - Unsaved C/assembly files prompt to save first; the review reads what is on disk.
+  - Files hitting `privacy.never_send`, directly or through an included header, are listed with 🔒 and not sent; the rest still go.
+  - More than 10 files or about 300 KB shows a warning in the list but does not block.
+  - Results are grouped by file in the panel. Jump, pin and mute act on the file the finding belongs to; muting removes the finding from view instead of re-sending the whole set.
+  - One audit entry per request, listing every file sent.
+- Three modes, auto / manual / off, switched from a mode button in the panel title bar and the status bar, or **sensAI: Switch Mode**. Stored as `sensai.enabled` (master switch, unchanged) plus `sensai.mode`, so turning sensAI off and on again returns to the previous mode.
+
+### Changed
+
+- Auto mode is unchanged. Switching to manual cancels save reviews that have not been sent yet (debounced saves, the full review owed after a burst) and lets one already in flight finish.
+- In manual mode, clearing local mutes no longer triggers a re-review; the findings reappear on the next review.
+
 ## 0.6.1 — 2026-10-01
 
 ### Changed

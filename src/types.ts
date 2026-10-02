@@ -1,3 +1,4 @@
+import { LineRange } from "./diff";
 import { SourceLanguage } from "./language";
 
 export type Severity = "error" | "warning" | "info";
@@ -32,11 +33,19 @@ export interface Finding {
 
 export interface DroppedFinding {
   finding: Finding;
-  reason: "evidence-not-found" | "line-out-of-range" | "muted" | "outside-changed-lines";
+  reason:
+    | "evidence-not-found"
+    | "line-out-of-range"
+    | "muted"
+    | "outside-changed-lines"
+    /** 審查整組改動時，模型回報的 file 對不上任何一個送審的檔案。 */
+    | "unknown-file";
 }
 
 export interface ReviewResult {
   filePath: string;
+  /** 面板上顯示的路徑。省略時顯示檔名。審查整組改動時給相對路徑，同名檔案才分得開。 */
+  displayPath?: string;
   /**
    * 審查當下的原始碼，逐行拆好。
    *
@@ -100,4 +109,38 @@ export interface ReviewContext {
   headers: HeaderFile[];
   truncated: boolean;
   language: SourceLanguage;
+}
+
+/** 審查整組改動（手動模式）時，其中一個送審的檔案。 */
+export interface ChangesetTarget {
+  /** 絕對路徑。 */
+  filePath: string;
+  /** 相對工作區根目錄、以 / 分隔。prompt 裡與模型回報的 file 都用這個。 */
+  relPath: string;
+  source: string;
+  language: SourceLanguage;
+  /** 審查範圍：改動處加上所在的函式。null 代表整份（新檔案、未追蹤）。 */
+  scope: LineRange[] | null;
+}
+
+export interface ChangesetContext {
+  targets: ChangesetTarget[];
+  /** 附帶的 header（不在這組改動裡的）。path 是顯示用的相對路徑。 */
+  headers: HeaderFile[];
+  truncated: boolean;
+}
+
+/** 審查整組改動的結果。每個送審的檔案一份 ReviewResult，沒有意見的也在。 */
+export interface ChangesetResult {
+  files: ReviewResult[];
+  /** 沒有送出的檔案與原因（命中 privacy.never_send）。 */
+  excluded: Array<{ file: string; reason: string }>;
+  /** 模型回報的檔案對不上任何送審檔案、因此濾掉的意見數。 */
+  unassigned: number;
+  durationMs: number;
+  completedAt: number;
+  headersIncluded: number;
+  contextTruncated: boolean;
+  /** 審查期間有送審的檔案又被改過。 */
+  stale?: boolean;
 }

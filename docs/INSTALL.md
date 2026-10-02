@@ -194,7 +194,8 @@ Endpoint、model、逾時這類**每台機器不同**的設定放 VS Code 使用
 
 | 設定 | 型別 | 預設 | 用途 |
 |---|---|---:|---|
-| `sensai.enabled` | boolean | `true` | 存檔時自動審查 |
+| `sensai.enabled` | boolean | `true` | 總開關，關閉後不送出任何審查 |
+| `sensai.mode` | `auto`／`manual` | `auto` | `auto` 存檔就審查；`manual` 存檔不審查，按 ▶ 審查改動才整組送審 |
 | `sensai.debounceMs` | number | `1000` | 存檔後等多久（毫秒）沒有新存檔才送出；`0` = 立即送出 |
 | `sensai.endpoint` | string | `http://127.0.0.1:3456` | endpoint 位址（SDK baseURL） |
 | `sensai.model` | string | `claude-opus-5` | 送出的 model 欄位／路由 key |
@@ -309,8 +310,9 @@ npm run mock -- --mode slow      # 拖 30 秒，驗逾時處理
 4. 側欄應出現 sensAI 面板；**View → Output → 選 `sensAI` 頻道**可看到狀態、
    被濾除的意見與錯誤訊息。
 
-審查（存檔與手動）都要 `sensai.enabled` 為 `true`（預設）。側欄標題列與狀態列的眼睛
-圖示可隨時切換，見 [6. 常用指令一覽](#6-常用指令一覽)。
+審查（存檔與手動）都要 `sensai.enabled` 為 `true`（預設）；存檔審查還要
+`sensai.mode` 為 `auto`（預設）。側欄標題列與狀態列的模式按鈕可隨時切換，
+見 [6. 常用指令一覽](#6-常用指令一覽)。
 
 ### 5.3 什麼時候才會觸發審查
 
@@ -419,16 +421,31 @@ npm run review -- path/to/file.c --json
 | `sensAI: Reload Rules` | 重新載入規則（改完 rules.yaml 通常會自動重載） |
 | `sensAI: Export False Positive Report` | 匯出本機誤報記錄 |
 | `sensAI: Clear Local Mutes` | 清除本機靜音 |
-| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI（同側欄標題列與狀態列的眼睛圖示） |
+| `sensAI: Switch Mode` | 切換自動／手動／關閉（同側欄標題列與狀態列的模式按鈕） |
+| `sensAI: Review Changes` | 手動模式專用：整組審查相對 HEAD 的改動（同 ▶ 按鈕） |
+| `sensAI: Toggle On/Off` | 暫時關閉／重新開啟 sensAI，重新開啟時回到原本的模式 |
 | `sensAI: Disable Temporarily` / `sensAI: Enable` | 明確關閉／開啟 |
 
-暫時關閉不用解除安裝，開關在兩個地方：
+sensAI 有三種模式，切換的按鈕在兩個地方：
 
-- **sensAI 側欄的標題列**（面板右上角）的眼睛按鈕：睜眼代表開啟中，點了就關閉；
-  閉眼代表已關閉，點了就開啟。
-- **狀態列右下角**，緊接在 `sensAI` 右邊的 `👁 開啟中`／`已關閉`。
+- **sensAI 側欄的標題列**（面板右上角）：👁 代表自動、⏸ 代表手動、閉眼代表已關閉，
+  點了跳出選單選模式。手動模式下旁邊多一個 **▶ 審查改動**。
+- **狀態列右下角**，緊接在 `sensAI` 右邊的 `👁 自動`／`⏸ 手動`／`已關閉`；手動模式下
+  再多一個 `▶ 審查改動`。
 
-也可以執行 `sensAI: Toggle On/Off`。**關閉就是完全不外送**：還在等待或進行中的審查
+| 模式 | 存檔時 | ▶ 審查改動 | `Review Current File` |
+|---|---|---|---|
+| 自動（預設） | 審查 | 不顯示 | 可用 |
+| 手動 | 不審查 | 整組送審 | 可用 |
+| 關閉 | 不審查 | 不顯示 | 擋下 |
+
+**手動模式**適合一個改動要跨好幾個函式、好幾個檔案的情況：改完一組後按 ▶，
+sensAI 列出相對 git HEAD 改過的 C／組語檔案（含未追蹤的新檔案）讓你勾選，再把
+選好的檔案放在同一個請求裡送審，範圍是改動的行加上所在的函式。命中
+`privacy.never_send` 的檔案標 🔒 不送，其他照送；超過 10 個檔案或約 300 KB 會警告
+但不擋。有還沒存檔的檔案時會先問要不要存檔。這個功能需要 git。
+
+**關閉**就是完全不外送：還在等待或進行中的審查
 （包括手動觸發的）會立刻取消，之後存檔不會審查，`sensAI: Review Current File`
 也會被擋下並詢問是否重新開啟，編輯器標題列的審查按鈕會隱藏。面板、釘選與筆記
 仍可檢視。開關寫在 `sensai.enabled`：若專案的 `.vscode/settings.json` 有設定它

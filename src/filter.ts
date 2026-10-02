@@ -75,11 +75,17 @@ export interface FilterResult {
 
 const SEVERITY_ORDER: Record<Finding["severity"], number> = { error: 0, warning: 1, info: 2 };
 
+/**
+ * evidenceCorpus 是比對 evidence 用的文字，預設就是 source。審查整組改動時
+ * 傳整組的內容 —— 跨檔案的意見本來就該引用另一個檔案的識別字，只拿本檔比對
+ * 會把最有價值的那一類意見當成捏造濾掉。行號範圍仍然以本檔為準。
+ */
 export function filterFindings(
   findings: Finding[],
   source: string,
   isMuted: (f: Finding) => boolean,
   scope: LineRange[] | null = null,
+  evidenceCorpus: string = source,
 ): FilterResult {
   const lineCount = source.split("\n").length;
   const kept: Finding[] = [];
@@ -95,7 +101,7 @@ export function filterFindings(
       dropped.push({ finding, reason: "outside-changed-lines" });
       continue;
     }
-    if (!evidenceIsGrounded(finding.evidence, source, lineCount)) {
+    if (!evidenceIsGrounded(finding.evidence, evidenceCorpus, lineCount)) {
       dropped.push({ finding, reason: "evidence-not-found" });
       continue;
     }

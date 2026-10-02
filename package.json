@@ -77,13 +77,35 @@
       },
       {
         "command": "sensai.enable",
-        "title": "sensAI: Enable",
-        "icon": "$(eye-closed)"
+        "title": "sensAI: Enable"
       },
       {
         "command": "sensai.disable",
-        "title": "sensAI: Disable Temporarily",
+        "title": "sensAI: Disable Temporarily"
+      },
+      {
+        "command": "sensai.reviewChanges",
+        "title": "sensAI: Review Changes (Manual Mode)",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sensai.pickMode",
+        "title": "sensAI: Switch Mode (Auto / Manual / Off)"
+      },
+      {
+        "command": "sensai.modeMenu.auto",
+        "title": "sensAI 模式：自動（點選切換）",
         "icon": "$(eye)"
+      },
+      {
+        "command": "sensai.modeMenu.manual",
+        "title": "sensAI 模式：手動（點選切換）",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "sensai.modeMenu.off",
+        "title": "sensAI 模式：已關閉（點選切換）",
+        "icon": "$(eye-closed)"
       }
     ],
     "menus": {
@@ -96,14 +118,42 @@
       ],
       "view/title": [
         {
-          "command": "sensai.disable",
-          "when": "view == sensai.findings && config.sensai.enabled",
-          "group": "navigation"
+          "command": "sensai.reviewChanges",
+          "when": "view == sensai.findings && config.sensai.enabled && config.sensai.mode == 'manual'",
+          "group": "navigation@1"
         },
         {
-          "command": "sensai.enable",
+          "command": "sensai.modeMenu.auto",
+          "when": "view == sensai.findings && config.sensai.enabled && config.sensai.mode != 'manual'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sensai.modeMenu.manual",
+          "when": "view == sensai.findings && config.sensai.enabled && config.sensai.mode == 'manual'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sensai.modeMenu.off",
           "when": "view == sensai.findings && !config.sensai.enabled",
-          "group": "navigation"
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sensai.reviewChanges",
+          "when": "config.sensai.enabled && config.sensai.mode == 'manual'"
+        },
+        {
+          "command": "sensai.modeMenu.auto",
+          "when": "false"
+        },
+        {
+          "command": "sensai.modeMenu.manual",
+          "when": "false"
+        },
+        {
+          "command": "sensai.modeMenu.off",
+          "when": "false"
         }
       ]
     },
@@ -131,7 +181,20 @@
         "sensai.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "sensAI 總開關。開啟時存檔自動審查 C 與組語檔案。關閉後不會送出任何審查，`sensAI: Review Current File` 也不例外；面板、釘選與筆記仍可檢視。可用 sensAI 側欄標題列或狀態列的眼睛圖示，或 `sensAI: Toggle On/Off` 切換。"
+          "markdownDescription": "sensAI 總開關。關閉後不會送出任何審查，`sensAI: Review Current File` 也不例外；面板、釘選與筆記仍可檢視。開啟時依 `sensai.mode` 決定什麼時候審查。可用 sensAI 側欄標題列或狀態列的模式按鈕切換。"
+        },
+        "sensai.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "自動：存檔就審查改動的地方。",
+            "手動：存檔不審查。改完一組後按 ▶ 審查改動（側欄標題列或狀態列），把相對 git HEAD 改過的檔案整組送審，可以跨多個檔案。"
+          ],
+          "default": "auto",
+          "markdownDescription": "什麼時候審查（`sensai.enabled` 開啟時）。`auto` 存檔就審查；`manual` 存檔不審查，改完一組後按 **▶ 審查改動**，把相對 git HEAD 改過的 C／組語檔案整組送審，模型看得到跨檔案的不一致。`sensAI: Review Current File` 兩種模式都可以用。"
         },
         "sensai.debounceMs": {
           "type": "number",

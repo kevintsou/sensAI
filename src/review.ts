@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { Finding, ReviewContext, Rule, Severity, SYNTAX_RULE_ID } from "./types";
+import { ChangesetContext, Finding, ReviewContext, Rule, Severity, SYNTAX_RULE_ID } from "./types";
 import { archFacts } from "./abi";
 import { LineRange } from "./diff";
-import { buildUserMessage, systemPrompt } from "./prompt";
+import { buildChangesetMessage, buildUserMessage, changesetSystemPrompt, systemPrompt } from "./prompt";
+import { SourceLanguage } from "./language";
 
 export interface ReviewClientOptions {
   endpoint: string;
@@ -117,6 +118,43 @@ const FINDINGS_TOOL: Anthropic.Tool = {
   } as Anthropic.Tool.InputSchema,
 };
 
+/**
+ * 審查整組改動用的 tool：每則意見多一個 file。
+ *
+ * 名稱跟單檔的一樣 —— 對模型來說做的是同一件事，mock router 也只認這個名字。
+ */
+const CHANGESET_TOOL: Anthropic.Tool = (() => {
+  const schema = FINDINGS_TOOL.input_schema as {
+    properties: { findings: { items: { properties: Record<string, unknown>; required: string[] } } };
+  };
+  const item = schema.properties.findings.items;
+  return {
+    ...FINDINGS_TOOL,
+    description:
+      "回報在這組改動中發現的問題，每則都要標明在哪個檔案。沒有發現問題時，傳入空陣列。" +
+      "每則意見都必須說明具體的觸發情境與後果；說不出來的就不要回報。",
+    input_schema: {
+      ...FINDINGS_TOOL.input_schema,
+      properties: {
+        findings: {
+          ...schema.properties.findings,
+          items: {
+            ...item,
+            properties: {
+              file: {
+                type: "string",
+                description: "問題所在的檔案，照抄待審查檔案標題裡的路徑。",
+              },
+              ...item.properties,
+            },
+            required: ["file", ...item.required],
+          },
+        },
+      },
+    } as Anthropic.Tool.InputSchema,
+  };
+})();
+
 function isConnectionProblem(err: unknown): boolean {
   if (err instanceof Anthropic.APIConnectionError) {
     return true;
@@ -188,16 +226,17 @@ function coerceFinding(
 }
 
 /**
- * 送出一次審查請求。
+ * 送出一次審查請求，回傳模型給的原始 findings 陣列（還沒整理）。
  *
  * 走 tool use 而不是 structured outputs：CCR 會把請求轉發到不同 provider，
  * `output_config.format` 不保證轉得過去，function calling 則幾乎都支援。
  */
-export async function requestReview(
-  ctx: ReviewContext,
-  rules: Rule[],
+async function callFindingsTool(
+  system: string,
+  user: string,
+  tool: Anthropic.Tool,
   opts: ReviewClientOptions,
-): Promise<Finding[]> {
+): Promise<unknown[]> {
   const client = new Anthropic({
     baseURL: opts.endpoint,
     // 依序：設定的 key → 環境變數 → 佔位字串。新版 CCR 會驗證，需要真 key；
@@ -213,14 +252,10 @@ export async function requestReview(
       {
         model: opts.model,
         max_tokens: 16000,
-        system: systemPrompt(
-          ctx.language,
-          ctx.language === "asm" ? archFacts(opts.archId) : null,
-          rules.length === 0,
-        ),
-        messages: [{ role: "user", content: buildUserMessage(ctx, rules, opts.changed ?? null) }],
-        tools: [FINDINGS_TOOL],
-        tool_choice: { type: "tool", name: FINDINGS_TOOL.name },
+        system,
+        messages: [{ role: "user", content: user }],
+        tools: [tool],
+        tool_choice: { type: "tool", name: tool.name },
       },
       { signal: opts.signal },
     );
@@ -236,27 +271,94 @@ export async function requestReview(
   }
 
   const call = response.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === FINDINGS_TOOL.name,
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === tool.name,
   );
   if (!call) {
     // 被強制 tool_choice 之後仍然沒有 tool_use，代表這條路由的模型不支援。
     throw new Error(
-      `模型沒有回傳 ${FINDINGS_TOOL.name} 工具呼叫（stop_reason: ${response.stop_reason}）。` +
+      `模型沒有回傳 ${tool.name} 工具呼叫（stop_reason: ${response.stop_reason}）。` +
         "這條 CCR 路由的模型可能不支援 tool use。",
     );
   }
 
   const input = call.input as { findings?: unknown };
-  if (!Array.isArray(input?.findings)) {
-    return [];
-  }
+  return Array.isArray(input?.findings) ? input.findings : [];
+}
+
+/** 把原始 findings 整理成 Finding，並回報捏造的規則 id。 */
+function coerceAll<T>(
+  raw: unknown[],
+  rules: Rule[],
+  opts: ReviewClientOptions,
+  attach: (finding: Finding, raw: Record<string, unknown>) => T,
+): T[] {
   const validIds = new Set(rules.map((r) => r.id));
   const fabricated = new Set<string>();
-  const findings = input.findings
-    .map((f) => coerceFinding(f, validIds, (id) => fabricated.add(id)))
-    .filter((f): f is Finding => f !== null);
+  const out: T[] = [];
+  for (const r of raw) {
+    const f = coerceFinding(r, validIds, (id) => fabricated.add(id));
+    if (f) {
+      out.push(attach(f, r as Record<string, unknown>));
+    }
+  }
   for (const id of fabricated) {
     opts.onUnknownRuleId?.(id);
   }
-  return findings;
+  return out;
+}
+
+/** 送出一次單檔審查請求。 */
+export async function requestReview(
+  ctx: ReviewContext,
+  rules: Rule[],
+  opts: ReviewClientOptions,
+): Promise<Finding[]> {
+  const raw = await callFindingsTool(
+    systemPrompt(
+      ctx.language,
+      ctx.language === "asm" ? archFacts(opts.archId) : null,
+      rules.length === 0,
+    ),
+    buildUserMessage(ctx, rules, opts.changed ?? null),
+    FINDINGS_TOOL,
+    opts,
+  );
+  return coerceAll(raw, rules, opts, (f) => f);
+}
+
+/** 模型回報的一則意見，連同它說的檔案（還沒對應到實際送審的檔案）。 */
+export interface ChangesetRawFinding {
+  file: string;
+  finding: Finding;
+}
+
+/**
+ * 送出一次「整組改動」的審查請求。所有送審的檔案在同一個請求裡，
+ * 模型才看得到跨檔案的不一致。
+ *
+ * rules 應該已經篩成這組改動裡出現的語言適用的規則。
+ */
+export async function requestChangesetReview(
+  cs: ChangesetContext,
+  rules: Rule[],
+  opts: ReviewClientOptions,
+): Promise<ChangesetRawFinding[]> {
+  const languages = new Set<SourceLanguage>(cs.targets.map((t) => t.language));
+  const syntaxOnly = new Set<SourceLanguage>(
+    [...languages].filter((l) => !rules.some((r) => r.languages.includes(l))),
+  );
+  const raw = await callFindingsTool(
+    changesetSystemPrompt(
+      languages,
+      languages.has("asm") ? archFacts(opts.archId) : null,
+      syntaxOnly,
+    ),
+    buildChangesetMessage(cs, rules),
+    CHANGESET_TOOL,
+    opts,
+  );
+  return coerceAll(raw, rules, opts, (finding, r) => ({
+    file: typeof r.file === "string" ? r.file.trim() : "",
+    finding,
+  }));
 }
