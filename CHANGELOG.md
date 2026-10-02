@@ -2,6 +2,12 @@
 
 All notable changes to sensAI are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Switching mode right after upgrading to 0.7.0 could fail with VS Code's bare "Unable to write to User Settings because sensai.mode is not a registered configuration", and the follow-up action carried on as if the switch had worked. VS Code had not yet picked up the new setting from the upgraded extension. A failed settings write now explains this and offers **Reload Window**, and the command that needed the switch (Review Changes, Review Current File while off) stops instead of continuing.
+
 ## 0.7.0 — 2026-10-02
 
 ### Added

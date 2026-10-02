@@ -112,40 +112,61 @@ function readSettings(): Settings {
  * 只改使用者設定會被它蓋掉，按了沒反應。都沒寫才寫使用者設定 —— 暫時關掉
  * 通常是「我這台機器先不要」，不該變成 commit 進版控的專案設定。
  */
-async function writeSetting(key: "enabled" | "mode", value: unknown): Promise<void> {
+async function writeSetting(key: "enabled" | "mode", value: unknown): Promise<boolean> {
   const c = vscode.workspace.getConfiguration("sensai");
   const info = c.inspect(key);
   const target =
     info?.workspaceValue !== undefined
       ? vscode.ConfigurationTarget.Workspace
       : vscode.ConfigurationTarget.Global;
-  await c.update(key, value, target);
+  try {
+    await c.update(key, value, target);
+    return true;
+  } catch (err) {
+    // 實際遇過：升級擴充後沒重新載入視窗，VS Code 的設定清單還是舊版的，
+    // 新加的設定（例如 sensai.mode）寫不進去，只會丟出「not a registered
+    // configuration」。直接告訴使用者怎麼解，而不是留一句看不懂的錯誤。
+    const RELOAD = "重新載入視窗";
+    const pick = await vscode.window.showErrorMessage(
+      `sensAI：無法寫入設定 sensai.${key}（${(err as Error).message}）。` +
+        "剛升級擴充時，VS Code 可能還沒載入新版的設定項目，重新載入視窗通常就能解決。",
+      RELOAD,
+    );
+    if (pick === RELOAD) {
+      void vscode.commands.executeCommand("workbench.action.reloadWindow");
+    }
+    return false;
+  }
 }
 
-async function setEnabled(enabled: boolean): Promise<void> {
-  await writeSetting("enabled", enabled);
+/** 回傳是否寫入成功。失敗時 writeSetting 已經提示過使用者。 */
+async function setEnabled(enabled: boolean): Promise<boolean> {
+  if (!(await writeSetting("enabled", enabled))) {
+    return false;
+  }
   void vscode.window.showInformationMessage(
     enabled ? "sensAI：已開啟。" : "sensAI：已暫時關閉，不會再送出任何審查。",
   );
+  return true;
 }
 
-/** 切換到某個模式。寫入的層級規則同 setEnabled。 */
-async function setMode(mode: Mode): Promise<void> {
+/** 切換到某個模式。寫入的層級規則同 setEnabled。回傳是否成功。 */
+async function setMode(mode: Mode): Promise<boolean> {
   if (mode === "off") {
-    await setEnabled(false);
-    return;
+    return setEnabled(false);
   }
-  if (readSettings().mode !== mode) {
-    await writeSetting("mode", mode);
+  if (readSettings().mode !== mode && !(await writeSetting("mode", mode))) {
+    return false;
   }
-  if (!readSettings().enabled) {
-    await writeSetting("enabled", true);
+  if (!readSettings().enabled && !(await writeSetting("enabled", true))) {
+    return false;
   }
   void vscode.window.showInformationMessage(
     mode === "auto"
       ? "sensAI：自動模式，存檔就會審查。"
       : "sensAI：手動模式，存檔不再審查。改完一組後按 ▶ 審查改動。",
   );
+  return true;
 }
 
 /** 讓使用者從三種模式裡挑一個。 */
@@ -1470,7 +1491,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (pick !== ENABLE) {
           return;
         }
-        await setEnabled(true);
+        if (!(await setEnabled(true))) {
+          return;
+        }
       }
       panel.reveal();
       controller.reviewNow(doc);
@@ -1508,7 +1531,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (pick !== SWITCH) {
           return;
         }
-        await setMode("manual");
+        if (!(await setMode("manual"))) {
+          return;
+        }
       }
       await controller.reviewChanges();
     }),
