@@ -2,7 +2,7 @@
 
 All notable changes to sensAI are documented in this file.
 
-## Unreleased
+## 0.7.1 — 2026-10-02
 
 ### Fixed
 
