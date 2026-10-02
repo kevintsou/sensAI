@@ -155,10 +155,16 @@ CCR 預設聽 `http://127.0.0.1:3456`，與 sensAI 的預設值一致，
 }
 ```
 
-並提供 `ANTHROPIC_API_KEY` 環境變數 —— sensAI 沒有存放 API key 的設定項，
-只讀環境變數（找不到時退回佔位字串 `ccr`，這在 CCR 情境下是刻意的）。
+再提供 API key，兩種方式擇一：
 
-> **注意**：擴充讀的是 **VS Code 行程本身**的環境變數。在 shell 裡 `export` 之後，
+- **`sensai.apiKey` 設定**（建議）：填在 VS Code **使用者設定**，不要填在專案的
+  `.vscode/settings.json` —— 那會被 commit 進版控，或被 Settings Sync 同步出去。
+- **`ANTHROPIC_API_KEY` 環境變數**：`sensai.apiKey` 留空時才會讀它。
+
+兩者都沒有時，送出的是佔位字串 `ccr`。這是給不驗證 key 的舊版 CCR 用的，
+直連 Anthropic 會被拒絕。
+
+> **注意**：用環境變數時，擴充讀的是 **VS Code 行程本身**的環境變數。在 shell 裡 `export` 之後，
 > 必須**從同一個 shell** 啟動 VS Code（`code .`）才吃得到；從 Dock/開始選單點開的
 > VS Code 看不到那個變數。macOS/Linux 可改用 `launchctl setenv` 或
 > `~/.zshenv`；Windows 用系統環境變數，設完要重開 VS Code。
@@ -199,11 +205,13 @@ Endpoint、model、逾時這類**每台機器不同**的設定放 VS Code 使用
 | `sensai.debounceMs` | number | `1000` | 存檔後等多久（毫秒）沒有新存檔才送出；`0` = 立即送出 |
 | `sensai.endpoint` | string | `http://127.0.0.1:3456` | endpoint 位址（SDK baseURL） |
 | `sensai.model` | string | `claude-opus-5` | 送出的 model 欄位／路由 key |
+| `sensai.apiKey` | string | `""` | 送給 endpoint 的 API key。新版 CCR 與直連 Anthropic 都需要。填在使用者設定，不要填在專案的 `.vscode/settings.json`；留空時讀 `ANTHROPIC_API_KEY` 環境變數 |
 | `sensai.rulesPath` | string | `""` | 指定規則檔；相對路徑以 workspace 根目錄為基準 |
 | `sensai.includeDepth` | number | `2` | 專案 header 遞迴解析深度 |
 | `sensai.contextBudgetBytes` | number | `120000` | header 上下文位元組上限 |
 | `sensai.requestTimeoutMs` | number | `120000` | 單次審查逾時（毫秒） |
-| `sensai.maxFindings` | number | `8` | 意見數量上限；超過時收合低嚴重度，`error` 不收 |
+| `sensai.maxFindings` | number | `8` | 意見數量上限；超過時收合低嚴重度，`error` 不收。審查改動時每個檔案各自計算 |
+| `sensai.reviewWholeFile` | boolean | `false` | 存檔審查的第二階段預設只看改動所在的函式；開啟後改審整份檔案（較慢、較耗 token） |
 
 ### 4.2 專案設定與隱私（必讀）
 
@@ -481,7 +489,7 @@ npm run review -- <檔案> [--endpoint URL] [--model NAME] [--arch ID]
 | 側欄標示「審查期間檔案又被改過」 | 送出後檔案還在改，行號是對著送出當下那版算的 | 意見仍可參考；要對齊目前內容重跑一次即可 |
 | `.sensai/config.yaml 解析失敗: …` | YAML 語法錯 | 依訊息修正縮排／引號 |
 | 多根工作區只審到部分專案 | **已知限制：只讀第一個 workspace folder** | 單獨開該資料夾 |
-| 直連 Anthropic 卻說沒有金鑰 | VS Code 沒吃到 `ANTHROPIC_API_KEY` | 從已 export 的 shell 執行 `code .`，見 [第 3 節選項 2](#選項-2直接打-anthropic-api) |
+| 直連 Anthropic 或新版 CCR 回報金鑰無效／未授權 | 沒設 `sensai.apiKey`，VS Code 也沒吃到 `ANTHROPIC_API_KEY` | 在使用者設定填 `sensai.apiKey`；用環境變數的話從已 export 的 shell 執行 `code .`，見 [第 3 節選項 2](#選項-2直接打-anthropic-api) |
 | 審查逾時 | 檔案大或模型慢 | 調高 `sensai.requestTimeoutMs`；或降 `sensai.includeDepth` / `sensai.contextBudgetBytes` |
 
 其他已知限制：

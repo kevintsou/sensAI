@@ -113,7 +113,9 @@ AI 會對 `HAL_UART_Transmit(&huart1, ...)` 這類呼叫給出聽起來合理但
 ```ts
 const client = new Anthropic({
   baseURL: "http://127.0.0.1:3456",
-  apiKey: "ccr",                    // CCR 不驗證，SDK 要求非空
+  // sensai.apiKey → ANTHROPIC_API_KEY → "ccr"。新版 CCR 會驗證，需要真 key；
+  // 舊版不驗證，但 SDK 要求非空，所以最後退回佔位字串。
+  apiKey: settings.apiKey || process.env.ANTHROPIC_API_KEY || "ccr",
 });
 ```
 
